@@ -426,6 +426,15 @@ QHttpServerResponse LanHttpServer::handleData(const QHttpServerRequest &req)
             QDate::fromString(b.value(QStringLiteral("date")).toString(), Qt::ISODate));
         return jsonOk(extra);
     }
+    // 客户端「数量管理」的每日录入列表是只读查询，走 /api/data（readAction）。
+    // 之前只挂在 /api/write 下，客户端会被回「未知的查询操作」而显示空表。
+    if (action == QLatin1String("list_qty_logs")) {
+        QJsonArray arr;
+        const QList<QtyLog> list = db.qtyLogsOf(b.value(QStringLiteral("product_id")).toInt(-1));
+        for (const QtyLog &l : list) arr.append(qtyLogJson(l));
+        extra[QStringLiteral("items")] = arr;
+        return jsonOk(extra);
+    }
     if (action == QLatin1String("list_users")) {
         QJsonArray arr;
         const auto users = db.listUsers();
@@ -500,6 +509,7 @@ QHttpServerResponse LanHttpServer::handleWrite(const QHttpServerRequest &req)
             return jsonErr(err.isEmpty() ? QStringLiteral("数量记录失败") : err);
         return jsonOk();
     }
+    // 兼容旧版客户端：新版客户端已从只读 /api/data 取列表，此处保留以免旧包读不到数据
     if (action == QLatin1String("list_qty_logs")) {
         QJsonArray arr;
         const QList<QtyLog> list = db.qtyLogsOf(b.value(QStringLiteral("product_id")).toInt(-1));

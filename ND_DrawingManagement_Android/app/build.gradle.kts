@@ -7,6 +7,10 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// 关于页的构建日期与 APK 文件名共用，每次编译自动取当天日期，无需手工维护
+val buildDate = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+val appVersion = "1.0"
+
 android {
     namespace = "com.houyawei.nddrawing"
     compileSdk = 34
@@ -16,11 +20,9 @@ android {
         minSdk = 24
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0"
+        versionName = appVersion
         // 只打 64 位，显著减小包体积
         ndk { abiFilters += listOf("arm64-v8a") }
-        // 每次编译自动生成构建日期，关于页直接显示，无需再手工改版本号
-        val buildDate = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         buildConfigField("String", "BUILD_DATE", "\"$buildDate\"")
     }
 
@@ -57,6 +59,16 @@ android {
         buildConfig = true
     }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.8" }
+
+    // 自定义 APK 文件名：AGP 8.3 的新变体 API 未暴露 outputFileName，
+    // 改用仍受支持的旧变体输出接口设置
+    applicationVariants.all {
+        val variantName = name
+        outputs.all {
+            (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
+                "ND_DrawingManagement_v${appVersion}_${buildDate}_${variantName}.apk"
+        }
+    }
 }
 
 dependencies {

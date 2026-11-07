@@ -9,11 +9,11 @@
 class QTabWidget;
 class QComboBox;
 class QTableWidget;
+class QTimeEdit;
 class QLineEdit;
 class QLabel;
 class QPlainTextEdit;
 class QCheckBox;
-class QListWidget;
 class QButtonGroup;
 class QPushButton;
 class LanHttpServer;
@@ -58,8 +58,11 @@ private slots:
     void onCancelWorkRoot();
     // 备份还原
     void onBackupNow();
-    void onRestore();
+    void onRestore();             // 从外部文件选择备份还原
+    void onRestoreBackup();       // 表格里单条「恢复」
+    void onDeleteBackup();        // 表格里单条「删除」
     void onAutoBackupToggled(bool on);
+    void onAutoBackupTimeChanged();
     void checkAutoBackup();
 
 private:
@@ -78,6 +81,8 @@ private:
     void refreshOpLogTable();
     void refreshWorkDbLabel();
     void refreshBackupList();
+    void refreshAutoBackupStatus();          // 展示自动备份开关/时间/上次执行日期
+    bool restoreFrom(const QString &src);    // 还原公共逻辑（单条恢复与外部文件共用）
     void pruneOldBackups();
     QString newBackupPath(const QString &tag) const;
     QList<QStringList> parseCsv(const QString &path) const; // 解析 CSV（自动识别 UTF-8/GBK）
@@ -135,7 +140,9 @@ private:
 
     // 备份还原
     QCheckBox *m_chkAutoBackup = nullptr;
-    QListWidget *m_backupList = nullptr;
+    QTimeEdit *m_edtAutoBackupTime = nullptr;
+    QTableWidget *m_backupTable = nullptr;   // 与用户日志一致的表格：单条可恢复/删除
+    QLabel *m_lblAutoBackupInfo = nullptr;
     QLabel *m_lblBackupStatus = nullptr;
     QTimer *m_backupTimer = nullptr;
 };

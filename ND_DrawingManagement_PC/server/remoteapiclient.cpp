@@ -534,11 +534,11 @@ bool RemoteApiClient::addQtyLog(int productId, int qty, const QDate &date, QStri
     return !writeAction(QStringLiteral("add_qty_log"), args, err).isEmpty();
 }
 
-QList<QtyLog> RemoteApiClient::qtyLogsOf(int productId) const
+QList<QtyLog> RemoteApiClient::qtyLogsOf(int productId, QString *err) const
 {
     QJsonObject args;
     args[QStringLiteral("product_id")] = productId;
-    const QJsonObject res = readAction(QStringLiteral("list_qty_logs"), args, nullptr);
+    const QJsonObject res = readAction(QStringLiteral("list_qty_logs"), args, err);
     QList<QtyLog> list;
     for (const QJsonValue &v : res.value(QStringLiteral("items")).toArray()) {
         const QJsonObject o = v.toObject();

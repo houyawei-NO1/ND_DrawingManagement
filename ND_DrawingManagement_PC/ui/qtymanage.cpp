@@ -102,8 +102,12 @@ void QtyManageDialog::loadProduct(int productId)
 
 void QtyManageDialog::reloadLogs()
 {
-    const QList<QtyLog> logs = DatabaseManager::instance().qtyLogsOf(m_pid);
+    QString err;
+    const QList<QtyLog> logs = DatabaseManager::instance().qtyLogsOf(m_pid, &err);
     m_logTable->setRowCount(logs.size());
+    if (!err.isEmpty())
+        NdMessageBox::warning(this, QStringLiteral("读取失败"),
+                              QStringLiteral("无法读取每日录入数量：%1").arg(err));
     for (int i = 0; i < logs.size(); ++i) {
         const QtyLog &l = logs.at(i);
         m_logTable->setItem(i, 0, new QTableWidgetItem(

@@ -61,7 +61,7 @@ public:
     bool updateMaterialCode(int productId, const QString &code, QString *err);
     bool updateQuantities(int productId, int qty, int minQty, int maxQty, QString *err);
     bool addQtyLog(int productId, int qty, const QDate &date, QString *err);
-    QList<QtyLog> qtyLogsOf(int productId) const;
+    QList<QtyLog> qtyLogsOf(int productId, QString *err = nullptr) const;
     bool updateQtyLog(int logId, int qty, QString *err);
     bool deleteQtyLog(int logId, QString *err);
     int qtyLogForDate(int productId, const QDate &date) const;

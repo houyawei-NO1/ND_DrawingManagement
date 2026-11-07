@@ -997,7 +997,7 @@ bool DatabaseManager::addQtyLog(int productId, int qty, const QDate &date, QStri
 QList<QtyLog> DatabaseManager::qtyLogsOf(int productId, QString *err)
 {
     if (!isServer())
-        return RemoteApiClient::instance().qtyLogsOf(productId);
+        return RemoteApiClient::instance().qtyLogsOf(productId, err);
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
         "SELECT id, qty, record_date, created_at FROM product_qty_log "

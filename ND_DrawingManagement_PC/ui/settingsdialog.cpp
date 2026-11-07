@@ -26,9 +26,21 @@
 #include <QDate>
 #include <QSettings>
 #include <QDateTime>
+#include <QTime>
+#include <QTimeEdit>
+#include <QTableWidgetItem>
 #include <QCheckBox>
 #include <QListWidget>
 #include <QButtonGroup>
+
+// 自动备份时间统一从 QSettings 读取；旧版本没有该键时沿用 17:00
+static QTime configuredAutoTime()
+{
+    const QTime t = QTime::fromString(
+        QSettings().value(QStringLiteral("backup/autoTime"), QStringLiteral("17:00")).toString(),
+        QStringLiteral("HH:mm"));
+    return t.isValid() ? t : QTime(17, 0);
+}
 #include <QAbstractButton>
 #include <QTextCursor>
 #include <QDir>
@@ -910,31 +922,66 @@ void SettingsDialog::buildBackupTab()
     lay->setSpacing(10);
 
     QLabel *tip = new QLabel(QStringLiteral(
-        "（仅服务器主机执行）备份文件保存在工作路径的「数据库/备份」文件夹中。还原会用所选备份覆盖当前数据库，"
-        "覆盖前会自动再备份一次当前库；超过 30 天的备份文件会被自动清理。"), page);
+        "（仅服务器主机执行）备份文件保存在工作路径的「数据库/备份」文件夹中。"
+        "「恢复」会用所选备份覆盖当前数据库，覆盖前会自动再备份一次当前库；"
+        "超过 30 天的备份文件会被自动清理。"), page);
     tip->setObjectName(QStringLiteral("previewInfo"));
     tip->setWordWrap(true);
     lay->addWidget(tip);
 
-    QHBoxLayout *row = new QHBoxLayout();
+    // 第一行：操作按钮 + 自动备份运行状态（让用户能确认自动备份确实跑过）
+    QHBoxLayout *row1 = new QHBoxLayout();
     QPushButton *btnBackup = new QPushButton(QStringLiteral("立 即 备 份"), page);
     btnBackup->setObjectName(QStringLiteral("btnEntry"));
     btnBackup->setCursor(Qt::PointingHandCursor);
-    QPushButton *btnRestore = new QPushButton(QStringLiteral("还 原…"), page);
+    QPushButton *btnRestore = new QPushButton(QStringLiteral("从文件还原…"), page);
     btnRestore->setObjectName(QStringLiteral("btnDanger"));
     btnRestore->setCursor(Qt::PointingHandCursor);
-    m_chkAutoBackup = new QCheckBox(QStringLiteral("自动备份（每天 17:00）"), page);
-    m_chkAutoBackup->setChecked(QSettings().value(QStringLiteral("backup/autoEnabled"), true).toBool());
-    row->addWidget(btnBackup);
-    row->addWidget(btnRestore);
-    row->addSpacing(20);
-    row->addWidget(m_chkAutoBackup);
-    row->addStretch();
-    lay->addLayout(row);
+    row1->addWidget(btnBackup);
+    row1->addWidget(btnRestore);
+    row1->addStretch();
+    m_lblAutoBackupInfo = new QLabel(page);
+    m_lblAutoBackupInfo->setObjectName(QStringLiteral("previewInfo"));
+    row1->addWidget(m_lblAutoBackupInfo);
+    lay->addLayout(row1);
 
-    m_backupList = new QListWidget(page);
-    m_backupList->setObjectName(QStringLiteral("productTable"));
-    lay->addWidget(m_backupList, 1);
+    // 第二行：自动备份开关 + 可调时间
+    QHBoxLayout *row2 = new QHBoxLayout();
+    m_chkAutoBackup = new QCheckBox(QStringLiteral("自动备份（每天）"), page);
+    m_chkAutoBackup->setChecked(
+        QSettings().value(QStringLiteral("backup/autoEnabled"), true).toBool());
+    m_edtAutoBackupTime = new QTimeEdit(page);
+    m_edtAutoBackupTime->setDisplayFormat(QStringLiteral("HH:mm"));
+    m_edtAutoBackupTime->setTime(configuredAutoTime());
+    m_edtAutoBackupTime->setFixedWidth(86);
+    m_edtAutoBackupTime->setEnabled(m_chkAutoBackup->isChecked());
+    m_edtAutoBackupTime->setToolTip(QStringLiteral(
+        "每天到该时刻自动备份一次；若到点后程序才启动，会自动补做当天备份"));
+    row2->addWidget(m_chkAutoBackup);
+    row2->addWidget(m_edtAutoBackupTime);
+    row2->addWidget(new QLabel(QStringLiteral("执行；备份保留 30 天"), page));
+    row2->addStretch();
+    lay->addLayout(row2);
+
+    // 备份列表：与「用户日志」一致的表格，每条可单独恢复 / 删除
+    m_backupTable = new QTableWidget(0, 6, page);
+    m_backupTable->setObjectName(QStringLiteral("productTable"));
+    m_backupTable->setHorizontalHeaderLabels({QStringLiteral("备份文件"), QStringLiteral("类型"),
+                                               QStringLiteral("大小"), QStringLiteral("备份时间"),
+                                               QStringLiteral("恢复"), QStringLiteral("删除")});
+    QHeaderView *hh = m_backupTable->horizontalHeader();
+    hh->setSectionResizeMode(0, QHeaderView::Stretch);
+    hh->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    hh->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    hh->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    hh->setSectionResizeMode(4, QHeaderView::Fixed);
+    hh->setSectionResizeMode(5, QHeaderView::Fixed);
+    m_backupTable->setColumnWidth(4, 76);
+    m_backupTable->setColumnWidth(5, 76);
+    m_backupTable->verticalHeader()->setVisible(false);
+    m_backupTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_backupTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    lay->addWidget(m_backupTable, 1);
 
     m_lblBackupStatus = new QLabel(page);
     m_lblBackupStatus->setObjectName(QStringLiteral("previewInfo"));
@@ -944,13 +991,13 @@ void SettingsDialog::buildBackupTab()
     connect(btnBackup, &QPushButton::clicked, this, &SettingsDialog::onBackupNow);
     connect(btnRestore, &QPushButton::clicked, this, &SettingsDialog::onRestore);
     connect(m_chkAutoBackup, &QCheckBox::toggled, this, &SettingsDialog::onAutoBackupToggled);
-    connect(m_backupList, &QListWidget::itemDoubleClicked,
-            this, [this](QListWidgetItem *) { onRestore(); });
+    connect(m_edtAutoBackupTime, &QTimeEdit::timeChanged,
+            this, &SettingsDialog::onAutoBackupTimeChanged);
     m_tabs->addTab(page, QStringLiteral("备份还原"));
 
     refreshBackupList();
     pruneOldBackups();
-    // 每分钟检查一次：到 17:00 且当天还没备份时执行；17 点之后启动会补做当天备份
+    // 每分钟检查一次：到点且当天还没备份时执行；到点之后启动会补做当天备份
     m_backupTimer = new QTimer(this);
     connect(m_backupTimer, &QTimer::timeout, this, &SettingsDialog::checkAutoBackup);
     m_backupTimer->start(60 * 1000);
@@ -967,23 +1014,57 @@ QString SettingsDialog::newBackupPath(const QString &tag) const
 
 void SettingsDialog::refreshBackupList()
 {
-    if (!m_backupList) return;
-    m_backupList->clear();
+    if (!m_backupTable) return;
+    m_backupTable->setRowCount(0);
     QDir d(DatabaseManager::instance().backupDirectory());
     const QFileInfoList files = d.entryInfoList(
         {QStringLiteral("nd_drawings_*.db")}, QDir::Files, QDir::Name | QDir::Reversed);
-    for (const QFileInfo &fi : files) {
-        auto *it = new QListWidgetItem(
-            QStringLiteral("%1　（%2 KB，%3）")
-                .arg(fi.fileName())
-                .arg((fi.size() + 1023) / 1024)
-                .arg(fi.lastModified().toString(QStringLiteral("yyyy-MM-dd HH:mm"))),
-            m_backupList);
-        it->setData(Qt::UserRole, fi.absoluteFilePath());
-        it->setToolTip(fi.absoluteFilePath());
+    m_backupTable->setRowCount(files.size());
+    for (int i = 0; i < files.size(); ++i) {
+        const QFileInfo &fi = files.at(i);
+        QString type = QStringLiteral("手动");
+        if (fi.fileName().contains(QStringLiteral("_自动_"))) type = QStringLiteral("自动");
+        else if (fi.fileName().contains(QStringLiteral("_还原前_"))) type = QStringLiteral("还原前");
+
+        auto put = [&](int c, const QString &s) {
+            auto *it = new QTableWidgetItem(s);
+            it->setTextAlignment(Qt::AlignCenter);
+            m_backupTable->setItem(i, c, it);
+        };
+        put(0, fi.fileName());
+        m_backupTable->item(i, 0)->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        put(1, type);
+        put(2, QStringLiteral("%1 KB").arg((fi.size() + 1023) / 1024));
+        put(3, fi.lastModified().toString(QStringLiteral("yyyy-MM-dd HH:mm")));
+
+        QPushButton *btnRestore = new QPushButton(QStringLiteral("恢复"), m_backupTable);
+        btnRestore->setObjectName(QStringLiteral("btnEntry")); // 绿色
+        btnRestore->setCursor(Qt::PointingHandCursor);
+        btnRestore->setProperty("backupPath", fi.absoluteFilePath());
+        connect(btnRestore, &QPushButton::clicked, this, &SettingsDialog::onRestoreBackup);
+        m_backupTable->setCellWidget(i, 4, btnRestore);
+
+        QPushButton *btnDel = new QPushButton(QStringLiteral("删除"), m_backupTable);
+        btnDel->setObjectName(QStringLiteral("btnDanger")); // 红色
+        btnDel->setCursor(Qt::PointingHandCursor);
+        btnDel->setProperty("backupPath", fi.absoluteFilePath());
+        connect(btnDel, &QPushButton::clicked, this, &SettingsDialog::onDeleteBackup);
+        m_backupTable->setCellWidget(i, 5, btnDel);
+        m_backupTable->setRowHeight(i, 34);
     }
-    if (m_backupList->count() == 0)
-        m_backupList->addItem(QStringLiteral("（暂无备份文件）"));
+    refreshAutoBackupStatus();
+}
+
+void SettingsDialog::refreshAutoBackupStatus()
+{
+    if (!m_lblAutoBackupInfo) return;
+    QSettings s;
+    const bool on = s.value(QStringLiteral("backup/autoEnabled"), true).toBool();
+    const QString last = s.value(QStringLiteral("backup/lastAutoDate")).toString();
+    m_lblAutoBackupInfo->setText(QStringLiteral("自动备份：%1　｜　上次自动备份：%2")
+        .arg(on ? QStringLiteral("每天 %1").arg(configuredAutoTime().toString(QStringLiteral("HH:mm")))
+                : QStringLiteral("已关闭"),
+             last.isEmpty() ? QStringLiteral("暂无记录") : last));
 }
 
 void SettingsDialog::pruneOldBackups()
@@ -1020,30 +1101,59 @@ void SettingsDialog::onBackupNow()
 void SettingsDialog::onRestore()
 {
     DatabaseManager &db = DatabaseManager::instance();
-    QString src;
-    if (m_backupList && m_backupList->currentItem())
-        src = m_backupList->currentItem()->data(Qt::UserRole).toString();
-    if (src.isEmpty()) {
-        src = QFileDialog::getOpenFileName(
-            this, QStringLiteral("选择用于还原的数据库（备份位于「数据库/备份」）"),
-            db.backupDirectory(), QStringLiteral("数据库文件 (*.db);;所有文件 (*)"));
-    }
-    if (src.isEmpty()) return;
+    const QString src = QFileDialog::getOpenFileName(
+        this, QStringLiteral("选择用于还原的数据库（备份位于「数据库/备份」）"),
+        db.backupDirectory(), QStringLiteral("数据库文件 (*.db);;所有文件 (*)"));
+    if (!src.isEmpty())
+        restoreFrom(src);
+}
+
+bool SettingsDialog::restoreFrom(const QString &src)
+{
+    if (src.isEmpty() || !QFileInfo::exists(src)) return false;
     if (!NdMessageBox::question(this, QStringLiteral("确认还原"),
             QStringLiteral("将用以下备份覆盖当前数据库：\n%1\n\n"
                            "覆盖前会自动备份一份当前库，还原后界面立即刷新。是否继续？").arg(src)))
-        return;
+        return false;
     QString err;
-    if (!db.restoreDatabase(src, &err)) {
+    if (!DatabaseManager::instance().restoreDatabase(src, &err)) {
         m_lblBackupStatus->setText(QStringLiteral("还原失败：%1").arg(err));
         NdMessageBox::critical(this, QStringLiteral("还原失败"), err);
-        return;
+        return false;
     }
     refreshBackupList();
     m_lblBackupStatus->setText(QStringLiteral("还原成功：%1").arg(QFileInfo(src).fileName()));
     emit databaseRestored();
     NdMessageBox::information(this, QStringLiteral("还原完成"),
                               QStringLiteral("数据库已还原，界面数据已刷新。"));
+    return true;
+}
+
+void SettingsDialog::onRestoreBackup()
+{
+    QPushButton *btn = qobject_cast<QPushButton *>(sender());
+    if (!btn) return;
+    restoreFrom(btn->property("backupPath").toString());
+}
+
+void SettingsDialog::onDeleteBackup()
+{
+    QPushButton *btn = qobject_cast<QPushButton *>(sender());
+    if (!btn) return;
+    const QString path = btn->property("backupPath").toString();
+    if (path.isEmpty()) return;
+    if (!NdMessageBox::question(this, QStringLiteral("确认删除"),
+            QStringLiteral("删除这个备份文件？此操作不可恢复：\n%1")
+                .arg(QFileInfo(path).fileName())))
+        return;
+    if (!QFile::remove(path)) {
+        m_lblBackupStatus->setText(QStringLiteral("删除失败：文件可能被占用。"));
+        NdMessageBox::warning(this, QStringLiteral("删除失败"),
+                              QStringLiteral("无法删除该备份，请确认文件未被其它程序占用。"));
+        return;
+    }
+    refreshBackupList();
+    m_lblBackupStatus->setText(QStringLiteral("已删除备份：%1").arg(QFileInfo(path).fileName()));
 }
 
 void SettingsDialog::onAutoBackupToggled(bool on)
@@ -1051,9 +1161,25 @@ void SettingsDialog::onAutoBackupToggled(bool on)
     QSettings s;
     s.setValue(QStringLiteral("backup/autoEnabled"), on);
     s.sync();
+    if (m_edtAutoBackupTime)
+        m_edtAutoBackupTime->setEnabled(on);
+    refreshAutoBackupStatus();
     m_lblBackupStatus->setText(on
-        ? QStringLiteral("已开启自动备份：每天 17:00，备份保留 30 天。")
+        ? QStringLiteral("已开启自动备份：每天 %1，备份保留 30 天。")
+              .arg(configuredAutoTime().toString(QStringLiteral("HH:mm")))
         : QStringLiteral("已关闭自动备份。"));
+}
+
+void SettingsDialog::onAutoBackupTimeChanged()
+{
+    if (!m_edtAutoBackupTime) return;
+    const QString t = m_edtAutoBackupTime->time().toString(QStringLiteral("HH:mm"));
+    QSettings s;
+    s.setValue(QStringLiteral("backup/autoTime"), t);
+    s.sync();
+    refreshAutoBackupStatus();
+    m_lblBackupStatus->setText(QStringLiteral(
+        "自动备份时间已设为每天 %1；若今天已过该时间且尚未备份，一分钟内会自动补做。").arg(t));
 }
 
 void SettingsDialog::checkAutoBackup()
@@ -1061,7 +1187,8 @@ void SettingsDialog::checkAutoBackup()
     QSettings s;
     if (!s.value(QStringLiteral("backup/autoEnabled"), true).toBool()) return;
     const QDateTime now = QDateTime::currentDateTime();
-    if (now.time().hour() < 17) return;
+    // 时间可调：到设定时刻（含之后启动补做）才执行，每天只做一次
+    if (now.time() < configuredAutoTime()) return;
     const QString key = QStringLiteral("backup/lastAutoDate");
     const QString today = now.date().toString(Qt::ISODate);
     if (s.value(key).toString() == today) return;
