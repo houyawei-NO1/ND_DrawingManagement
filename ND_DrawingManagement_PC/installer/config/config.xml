@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Installer>
+    <Name>南都图纸管理</Name>
+    <Version>1.0.0</Version>
+    <Title>南都图纸管理 安装向导</Title>
+    <Publisher>南都</Publisher>
+    <StartMenuDir>南都</StartMenuDir>
+    <TargetDir>@ApplicationsDir@/ND_DrawingManagement_PC</TargetDir>
+    <WizardStyle>Classic</WizardStyle>
+    <StyleSheet>style.qss</StyleSheet>
+    <TitleColor>#FFFFFF</TitleColor>
+    <InstallerApplicationIcon>logo</InstallerApplicationIcon>
+    <RunProgram>@TargetDir@/ND_DrawingManagement_PC.exe</RunProgram>
+</Installer>

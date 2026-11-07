@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 仅作为启动窗口主题，界面配色由 Compose 的 MaterialTheme 负责 -->
+    <style name="Theme.NDDrawing" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

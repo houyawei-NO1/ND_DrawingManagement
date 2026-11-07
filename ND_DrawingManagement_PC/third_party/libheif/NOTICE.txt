@@ -1,0 +1,37 @@
+第三方组件声明（HEIC 图纸解码）
+================================
+
+heif.dll
+  libheif 1.23.7，由官方源码用 MinGW-w64 编译，只启用 HEIC 解码
+  （libde265 backend built-in），禁用所有编码器与 AVIF/JPEG2000 后端。
+  源码：https://github.com/strukturag/libheif/releases/tag/v1.23.7
+  许可证：LGPL-3.0 AND MIT，全文见 COPYING.libheif.txt
+
+libde265-0.dll
+  libde265 1.1.3，MSYS2  mingw-w64-x86_64-libde265  预编译包
+  源码：https://github.com/strukturag/libde265
+  包地址：https://repo.msys2.org/mingw/mingw64/
+  许可证：LGPL-3.0，全文见 COPYING.libde265.txt
+
+使用方式
+  本程序通过 QLibrary / LoadLibrary 在运行时动态加载 heif.dll 的 C API，
+  未静态链接、未修改上述库源码；使用者可自行替换同目录下的 DLL。
+  两个 DLL 由 CMake 编译后自动复制到 exe 同目录，并由
+  installer/build_installer.bat 一并打进安装包。
+
+运行时依赖
+  除上述两个 DLL，还需 MinGW 运行时：
+  libgcc_s_seh-1.dll / libstdc++-6.dll / libwinpthread-1.dll
+  （安装包由 windeployqt 一并带上）。
+
+重建 heif.dll（可选）
+  cmake -S libheif-1.23.7 -B build -G "MinGW Makefiles" ^
+    -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON ^
+    -DENABLE_PLUGIN_LOADING=OFF -DWITH_LIBDE265=ON -DWITH_LIBDE265_PLUGIN=OFF ^
+    -DLIBDE265_INCLUDE_DIR=<libde265>/include ^
+    -DLIBDE265_LIBRARY=<libde265>/lib/libde265.dll.a ^
+    -DWITH_X265=OFF -DWITH_AOM_DECODER=OFF -DWITH_AOM_ENCODER=OFF ^
+    -DWITH_DAV1D=OFF -DWITH_EXAMPLES=OFF -DWITH_GDK_PIXBUF=OFF ^
+    -DBUILD_TESTING=OFF -DBUILD_DOCUMENTATION=OFF
+  cmake --build build --parallel
+  把 build/libheif/libheif.dll 重命名为 heif.dll 放回本目录即可。

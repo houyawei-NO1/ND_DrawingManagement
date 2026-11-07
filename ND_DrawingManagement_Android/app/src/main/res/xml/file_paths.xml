@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 公共 Download/南都图纸（需要 MANAGE_EXTERNAL_STORAGE） -->
+    <external-path name="nd_download" path="Download/南都图纸" />
+    <!-- 兜底：未授予权限时使用应用私有外部存储 Android/data/.../files/南都图纸 -->
+    <external-files-path name="nd_external" path="南都图纸" />
+    <!-- 分享功能生成的临时图片 -->
+    <cache-path name="share_cache" path="." />
+</paths>

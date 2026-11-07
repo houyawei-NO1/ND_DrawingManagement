@@ -1,0 +1,213 @@
+/* 南都图纸管理 安装向导 —— 深色 + 绿色，贴近主程序弹窗风格 */
+
+QWidget
+{
+    background-color: #1b1f2a;
+    color: #e6e9f0;
+    font-family: "Microsoft YaHei", "微软雅黑";
+    font-size: 13px;
+}
+
+QLabel
+{
+    background: transparent;
+    color: #e6e9f0;
+}
+
+QPushButton
+{
+    background-color: #2f9e63;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 20px;
+}
+
+QPushButton:hover
+{
+    background-color: #37b872;
+}
+
+QPushButton:pressed
+{
+    background-color: #278456;
+}
+
+QPushButton:disabled
+{
+    background-color: #2a3140;
+    color: #7c8698;
+}
+
+QPushButton:default
+{
+    border: 1px solid #43cf7c;
+}
+
+QLineEdit, QComboBox, QSpinBox
+{
+    background-color: #232838;
+    color: #e6e9f0;
+    border: 1px solid #3a4152;
+    border-radius: 5px;
+    padding: 5px 8px;
+    selection-background-color: #2f9e63;
+}
+
+QComboBox::drop-down
+{
+    border: none;
+    width: 22px;
+}
+
+QComboBox QAbstractItemView
+{
+    background-color: #232838;
+    color: #e6e9f0;
+    border: 1px solid #3a4152;
+    selection-background-color: #2f9e63;
+}
+
+QTreeView, QListView, QTableView
+{
+    background-color: #171b24;
+    alternate-background-color: #1e2431;
+    color: #e6e9f0;
+    border: 1px solid #2b3242;
+    outline: none;
+}
+
+QTreeView::item, QListView::item
+{
+    padding: 5px 6px;
+}
+
+QTreeView::item:selected, QListView::item:selected
+{
+    background-color: #2f9e63;
+    color: #ffffff;
+}
+
+QTreeView::item:hover, QListView::item:hover
+{
+    background-color: #262d3d;
+}
+
+QHeaderView::section
+{
+    background-color: #232838;
+    color: #b9c2d4;
+    border: none;
+    border-bottom: 1px solid #2b3242;
+    padding: 5px;
+}
+
+QTextBrowser, QTextEdit, QPlainTextEdit
+{
+    background-color: #171b24;
+    color: #c9d1e0;
+    border: 1px solid #2b3242;
+    border-radius: 4px;
+    selection-background-color: #2f9e63;
+}
+
+QProgressBar
+{
+    background-color: #232838;
+    border: none;
+    border-radius: 4px;
+    text-align: center;
+    color: #e6e9f0;
+    height: 16px;
+}
+
+QProgressBar::chunk
+{
+    background-color: #43cf7c;
+    border-radius: 4px;
+}
+
+QCheckBox, QRadioButton
+{
+    background: transparent;
+    color: #e6e9f0;
+    spacing: 6px;
+}
+
+QGroupBox
+{
+    border: 1px solid #2b3242;
+    border-radius: 6px;
+    margin-top: 10px;
+    padding-top: 8px;
+    color: #b9c2d4;
+}
+
+QGroupBox::title
+{
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+}
+
+QScrollBar:vertical
+{
+    background: #171b24;
+    width: 10px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical
+{
+    background: #3a4152;
+    border-radius: 5px;
+    min-height: 24px;
+}
+
+QScrollBar::handle:vertical:hover
+{
+    background: #4a5468;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical
+{
+    height: 0;
+}
+
+QScrollBar:horizontal
+{
+    background: #171b24;
+    height: 10px;
+    margin: 0;
+}
+
+QScrollBar::handle:horizontal
+{
+    background: #3a4152;
+    border-radius: 5px;
+    min-width: 24px;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal
+{
+    width: 0;
+}
+
+QMenu
+{
+    background-color: #232838;
+    color: #e6e9f0;
+    border: 1px solid #3a4152;
+}
+
+QMenu::item:selected
+{
+    background-color: #2f9e63;
+}
+
+QToolTip
+{
+    background-color: #232838;
+    color: #e6e9f0;
+    border: 1px solid #3a4152;
+}
