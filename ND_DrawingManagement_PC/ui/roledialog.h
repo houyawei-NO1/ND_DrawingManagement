@@ -1,7 +1,7 @@
 #ifndef ROLEDIALOG_H
 #define ROLEDIALOG_H
 
-#include <QWidget>
+#include "overlaymask.h"
 
 class QButtonGroup;
 class QPushButton;
@@ -20,9 +20,9 @@ struct RoleChoice {
 };
 
 // 选择本机角色：全屏黑色半透明遮罩 + 深色信息卡，
-// 与「关于」「登录/录入」弹窗保持同一套视觉风格。
+// 程序内所有遮罩统一走 OverlayMask，视觉与覆盖范围完全一致。
 // 首次启动时（还没有主窗口）作为独立顶层窗口显示。
-class RoleSelectDialog : public QWidget
+class RoleSelectDialog : public OverlayMask
 {
     Q_OBJECT
 public:
@@ -31,7 +31,6 @@ public:
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
-    void paintEvent(QPaintEvent *event) override;
 
 private:
     explicit RoleSelectDialog(const RoleChoice &current, QWidget *parent = nullptr);

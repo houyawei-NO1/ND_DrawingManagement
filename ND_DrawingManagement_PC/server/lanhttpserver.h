@@ -29,8 +29,14 @@ class QHttpServerRequest;
 //   GET|HEAD /api/sync/file?path=相对路径[&i=N&total=M] → 二进制图纸 / HEAD 仅返回大小
 // 客户端（PC 程序）接口：服务器主机是唯一的数据写入点
 //   POST /api/auth/login → 校验账号密码，返回 token 与角色（账号只在服务器主机维护）
-//   POST /api/data       → 只读查询（action 分发，无需 token）
+//   POST /api/data       → 只读查询（action 分发，无需 token；含 list_op_logs 用户操作日志）
 //   POST /api/write      → 写操作（action 分发，必须带有效 token，服务端统一落盘）
+// 版本管理（安装包只保存在服务器「工作路径/安装包」，PC 与手机 APK 各只保留一份）：
+//   POST /api/update/info             → 当前 PC 安装包版本信息
+//   POST /api/update/upload           → 按 1MB 分块上传（需 token，body 的 kind=pc|android）
+//   GET  /api/update/package          → 下载当前 PC 安装包
+//   GET  /api/update/android/info     → 当前手机 APK 版本信息（手机 APP 检查更新用）
+//   GET  /api/update/android/package  → 下载当前手机 APK
 class LanHttpServer : public QObject
 {
 Q_OBJECT
@@ -87,6 +93,19 @@ private:
     QHttpServerResponse handleData(const QHttpServerRequest &req);
     QHttpServerResponse handleWrite(const QHttpServerRequest &req);
     bool validToken(const QString &token) const;
+
+    // 版本管理：版本信息 / 安装包分块上传 / 安装包下载（PC 与手机 APK 各一份）
+    QHttpServerResponse handleUpdateInfo(const QHttpServerRequest &req);
+    QHttpServerResponse handleUpdateUpload(const QHttpServerRequest &req);
+    QHttpServerResponse handleUpdatePackage() const;
+    QHttpServerResponse handleAndroidInfo() const;
+    QHttpServerResponse handleAndroidPackage() const;
+    QString m_uploadName;
+    QString m_uploadKind = QStringLiteral("pc");
+    QString m_uploadVersion;
+    QString m_uploadStamp;
+    qint64 m_uploadOffset = 0;
+    qint64 m_uploadSize = 0;
 
     QByteArray buildIndexPage() const;
     QByteArray apiProducts(const QString &category, const QString &kw, int dtype) const;

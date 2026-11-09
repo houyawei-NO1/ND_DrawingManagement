@@ -15,6 +15,9 @@
 #include <QJsonArray>
 #include <QSettings>
 #include <QDateTime>
+#include <QHash>
+#include <QRegularExpression>
+#include "util/xlsreader.h"
 
 // 操作日志明细：一行「字段 / 修改前 / 修改后」，打包成 JSON 供设置页弹窗渲染表格
 static QJsonObject opRow(const QString &field, const QString &before, const QString &after)
@@ -419,7 +422,278 @@ void DatabaseManager::createTables()
         " id INTEGER PRIMARY KEY AUTOINCREMENT,"
         " oper TEXT, action TEXT, model TEXT, name TEXT,"
         " detail TEXT, created_at TEXT)"));
+    // ERP 库存档案：批次信息 + 明细，存在主库里，随备份一起走
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS stock_batch("
+        " key TEXT PRIMARY KEY, file_name TEXT, label TEXT,"
+        " rows INTEGER, imported_at TEXT)"));
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS stock_archive("
+        " batch TEXT NOT NULL, ord INTEGER NOT NULL,"
+        " row_no TEXT, code TEXT, name TEXT, model TEXT, spec TEXT,"
+        " origin TEXT, supplier TEXT, safe_qty TEXT,"
+        " creator TEXT, created_at TEXT, modifier TEXT, modified_at TEXT,"
+        " package TEXT, search TEXT)"));
+    q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_stock_batch ON stock_archive(batch)"));
     ensureProductColumns();
+}
+
+// ==================== ERP 库存档案 ====================
+namespace {
+// 存货档案数据-2026_11_07-16_40_38.xls → 管家婆20261107 16:40数据
+QString stockBatchLabel(const QString &fileName)
+{
+    static const QRegularExpression re(QStringLiteral(
+        "(\\d{4})[_-](\\d{2})[_-](\\d{2})[-_ T]*(\\d{2})[_-](\\d{2})[_-](\\d{2})"));
+    const QRegularExpressionMatch m = re.match(fileName);
+    if (m.hasMatch())
+        return QStringLiteral("管家婆%1%2%3 %4:%5数据")
+            .arg(m.captured(1), m.captured(2), m.captured(3),
+                 m.captured(4), m.captured(5));
+    return QFileInfo(fileName).completeBaseName();
+}
+
+// 从存货全名/型号里提取常见贴片封装，方便一眼看到 0603、0805 这类信息
+QString stockPackageOf(const QString &name, const QString &model)
+{
+    static const QRegularExpression re(QStringLiteral(
+        "C?(0201|0402|0603|0805|1206|1210|1812|2010|2512)"),
+        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch m = re.match(name + QChar(' ') + model);
+    return m.hasMatch() ? m.captured(1) : QString();
+}
+
+QString stockRowText(const QStringList &c)
+{
+    return c.join(QChar(' ')).toLower();
+}
+} // namespace
+
+QList<StockBatch> DatabaseManager::stockBatches(QString *err) const
+{
+    if (!isServer())
+        return RemoteApiClient::instance().stockBatches(err);
+    QList<StockBatch> out;
+    QSqlQuery q(m_db);
+    if (!q.exec(QStringLiteral(
+            "SELECT key,file_name,label,rows,imported_at FROM stock_batch "
+            "ORDER BY imported_at DESC"))) {
+        if (err) *err = q.lastError().text();
+        return out;
+    }
+    while (q.next()) {
+        StockBatch b;
+        b.key = q.value(0).toString();
+        b.fileName = q.value(1).toString();
+        b.label = q.value(2).toString();
+        b.rows = q.value(3).toInt();
+        b.importedAt = q.value(4).toString();
+        out.append(b);
+    }
+    return out;
+}
+
+QList<QStringList> DatabaseManager::stockSearch(const QString &batchKey,
+                                                const QString &keyword, int limit,
+                                                int *total, QString *err) const
+{
+    if (total) *total = 0;
+    if (!isServer())
+        return RemoteApiClient::instance().stockSearch(batchKey, keyword, limit, total, err);
+    QList<QStringList> out;
+    if (batchKey.isEmpty() || keyword.trimmed().isEmpty())
+        return out;
+    // instr 是纯子串匹配，用户输入的 %、_ 不会被当成 LIKE 通配符；两边统一小写
+    const QString kw = keyword.trimmed().toLower();
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "SELECT COUNT(*) FROM stock_archive WHERE batch=? AND instr(search, ?) > 0"));
+    q.addBindValue(batchKey);
+    q.addBindValue(kw);
+    if (q.exec() && q.next() && total)
+        *total = q.value(0).toInt();
+    q.prepare(QStringLiteral(
+        "SELECT row_no,code,name,model,spec,origin,supplier,safe_qty,"
+        "creator,created_at,modifier,modified_at,package "
+        "FROM stock_archive WHERE batch=? AND instr(search, ?) > 0 "
+        "ORDER BY ord LIMIT ?"));
+    q.addBindValue(batchKey);
+    q.addBindValue(kw);
+    q.addBindValue(qMax(1, limit));
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        return out;
+    }
+    while (q.next()) {
+        QStringList row;
+        row.reserve(13);
+        for (int i = 0; i < 13; ++i)
+            row.append(q.value(i).toString());
+        out.append(row);
+    }
+    return out;
+}
+
+bool DatabaseManager::importStockFile(const QString &srcPath,
+                                      const QString &originalName, QString *err)
+{
+    if (!isServer())
+        return RemoteApiClient::instance().importStockFile(srcPath, originalName, err);
+
+    // 归档到服务器工作目录的「数据库」文件夹，保留 ERP 原始文件名
+    const QString fileName = QFileInfo(originalName.isEmpty() ? srcPath : originalName).fileName();
+    if (fileName.isEmpty()) {
+        if (err) *err = QStringLiteral("文件名无效");
+        return false;
+    }
+    const QString dir = dbDirectory();
+    if (dir.isEmpty()) {
+        if (err) *err = QStringLiteral("服务器工作目录未配置");
+        return false;
+    }
+    if (!QDir().mkpath(dir)) {
+        if (err) *err = QStringLiteral("无法创建数据库文件夹：%1").arg(dir);
+        return false;
+    }
+    const QString target = QDir(dir).filePath(fileName);
+    const QFileInfo srcInfo(srcPath);
+    if (srcInfo.absoluteFilePath().compare(QFileInfo(target).absoluteFilePath(),
+                                           Qt::CaseInsensitive) != 0) {
+        if (QFile::exists(target) && !QFile::remove(target)) {
+            if (err) *err = QStringLiteral("无法覆盖同名表格文件");
+            return false;
+        }
+        if (!QFile::copy(srcPath, target)) {
+            if (err) *err = QStringLiteral("复制表格到数据库文件夹失败：%1").arg(target);
+            return false;
+        }
+    }
+
+    QList<QStringList> rows;
+    QString perr;
+    if (!XlsReader::read(target, rows, &perr)) {
+        if (err) *err = perr;
+        return false;
+    }
+
+    // 表头按列名定位，兼容 ERP 导出的列顺序变化；前 20 行内找
+    int header = -1;
+    for (int i = 0; i < qMin(rows.size(), 20); ++i) {
+        if (rows.at(i).contains(QStringLiteral("存货编号"))
+            && (rows.at(i).contains(QStringLiteral("存货全名"))
+                || rows.at(i).contains(QStringLiteral("存货型号")))) {
+            header = i;
+            break;
+        }
+    }
+    if (header < 0) {
+        if (err) *err = QStringLiteral("未识别到表头（需包含「存货编号」「存货全名」）");
+        return false;
+    }
+    QHash<QString, int> idx;
+    const QStringList &head = rows.at(header);
+    for (int c = 0; c < head.size(); ++c)
+        idx.insert(head.at(c).trimmed(), c);
+    const auto col = [&idx](const QStringList &line, const QString &key) {
+        const int c = idx.value(key, -1);
+        return (c >= 0 && c < line.size()) ? line.at(c).trimmed() : QString();
+    };
+
+    const QString key = QFileInfo(fileName).completeBaseName();
+    const QString label = stockBatchLabel(fileName);
+    const QString now = QDateTime::currentDateTime().toString(
+        QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+
+    if (!m_db.transaction()) {
+        if (err) *err = m_db.lastError().text();
+        return false;
+    }
+    QSqlQuery q(m_db);
+    const auto fail = [&](const QString &why) {
+        m_db.rollback();
+        if (err) *err = why.isEmpty() ? q.lastError().text() : why;
+        return false;
+    };
+    q.prepare(QStringLiteral("DELETE FROM stock_archive WHERE batch=?"));
+    q.addBindValue(key);
+    if (!q.exec()) return fail(QString());
+    q.prepare(QStringLiteral(
+        "INSERT INTO stock_archive(batch,ord,row_no,code,name,model,spec,origin,supplier,"
+        "safe_qty,creator,created_at,modifier,modified_at,package,search) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
+    int count = 0;
+    for (int i = header + 1; i < rows.size(); ++i) {
+        const QStringList &line = rows.at(i);
+        QStringList c;
+        c.reserve(13);
+        c << col(line, QStringLiteral("行号"))
+          << col(line, QStringLiteral("存货编号"))
+          << col(line, QStringLiteral("存货全名"))
+          << col(line, QStringLiteral("存货型号"))
+          << col(line, QStringLiteral("存货规格"))
+          << col(line, QStringLiteral("存货产地"))
+          << col(line, QStringLiteral("缺省供应商"))
+          << col(line, QStringLiteral("安全库存数量"))
+          << col(line, QStringLiteral("建档人"))
+          << col(line, QStringLiteral("建档时间"))
+          << col(line, QStringLiteral("修改人"))
+          << col(line, QStringLiteral("修改时间"));
+        c << stockPackageOf(c.at(2), c.at(3));
+        bool empty = true;
+        for (const QString &v : c) {
+            if (!v.isEmpty()) { empty = false; break; }
+        }
+        if (empty) continue;
+        q.addBindValue(key);
+        q.addBindValue(count);
+        for (int k = 0; k < 12; ++k) q.addBindValue(c.at(k));
+        q.addBindValue(c.at(12));
+        q.addBindValue(stockRowText(c));
+        if (!q.exec()) return fail(QString());
+        ++count;
+    }
+    q.prepare(QStringLiteral(
+        "INSERT OR REPLACE INTO stock_batch(key,file_name,label,rows,imported_at) "
+        "VALUES(?,?,?,?,?)"));
+    q.addBindValue(key);
+    q.addBindValue(fileName);
+    q.addBindValue(label);
+    q.addBindValue(count);
+    q.addBindValue(now);
+    if (!q.exec()) return fail(QString());
+    if (!m_db.commit()) return fail(QString());
+    return true;
+}
+
+bool DatabaseManager::deleteStockBatch(const QString &key, QString *err)
+{
+    if (!isServer())
+        return RemoteApiClient::instance().deleteStockBatch(key, err);
+    if (key.isEmpty()) {
+        if (err) *err = QStringLiteral("批次为空");
+        return false;
+    }
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT file_name FROM stock_batch WHERE key=?"));
+    q.addBindValue(key);
+    const QString fileName = (q.exec() && q.next()) ? q.value(0).toString() : QString();
+    if (!m_db.transaction()) {
+        if (err) *err = m_db.lastError().text();
+        return false;
+    }
+    q.prepare(QStringLiteral("DELETE FROM stock_archive WHERE batch=?"));
+    q.addBindValue(key);
+    if (!q.exec()) { m_db.rollback(); if (err) *err = q.lastError().text(); return false; }
+    q.prepare(QStringLiteral("DELETE FROM stock_batch WHERE key=?"));
+    q.addBindValue(key);
+    if (!q.exec()) { m_db.rollback(); if (err) *err = q.lastError().text(); return false; }
+    if (!m_db.commit()) { if (err) *err = m_db.lastError().text(); return false; }
+    if (!fileName.isEmpty()) {
+        const QString path = QDir(dbDirectory()).filePath(fileName);
+        if (QFile::exists(path)) QFile::remove(path);
+    }
+    return true;
 }
 
 // ==================== 用户操作日志 ====================
@@ -452,11 +726,14 @@ bool DatabaseManager::addOpLog(const QString &action, const QString &model,
 
 QList<OpLog> DatabaseManager::opLogs(const QDateTime &since) const
 {
+    // 客户端本机没有 op_log 表，所有账号的操作都由服务器统一记录，这里转发只读查询
+    if (!isServer()) return RemoteApiClient::instance().opLogs(since);
     QList<OpLog> list;
     QSqlQuery q(m_db);
+    // 只取最近 500 条：设置页逐行建表格项/按钮，全量日志会让切页明显卡顿
     q.prepare(QStringLiteral(
         "SELECT id,oper,action,model,name,detail,created_at FROM op_log"
-        " WHERE created_at>=? ORDER BY id DESC"));
+        " WHERE created_at>=? ORDER BY id DESC LIMIT 500"));
     q.addBindValue(since.toString(Qt::ISODate));
     if (!q.exec())
         return list;

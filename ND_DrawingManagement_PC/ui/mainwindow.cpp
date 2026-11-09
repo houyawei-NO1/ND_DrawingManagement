@@ -3,7 +3,10 @@
 #include "entrydialog.h"
 #include "managepage.h"
 #include "settingsdialog.h"
+#include "toolspage.h"
+#include "updatedialog.h"
 #include "server/lanhttpserver.h"
+#include "server/updatemanager.h"
 #include "server/remoteapiclient.h"
 #include "roledialog.h"
 
@@ -90,16 +93,18 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent)
     p0->addWidget(catBar);
     p0->addWidget(body, 1);
 
-    // 页面1：录入；页面2：管理；页面3：设置
+    // 页面1：录入；页面2：管理；页面3：设置；页面4：工具（库存查询 + 关于）
     m_entryPage = new EntryDialog(this);
     m_managePage = new ManagePage(this);
     m_settingsPage = new SettingsDialog(this);
+    m_toolsPage = new ToolsPage(this);
 
     m_stack = new QStackedWidget(this);
     m_stack->addWidget(page0);
     m_stack->addWidget(m_entryPage);
     m_stack->addWidget(m_managePage);
     m_stack->addWidget(m_settingsPage);
+    m_stack->addWidget(m_toolsPage);
 
     // 管理页「修改」→ 跳转录入页编辑
     connect(m_managePage, &ManagePage::requestEditProduct, this, [this](int pid) {
@@ -113,6 +118,11 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent)
     root->setSpacing(0);
     QWidget *titleBar = findChild<QWidget *>(QStringLiteral("titleBar"));
     root->addWidget(titleBar);
+    // 菜单栏下方的浅灰细线放在共用根布局里，切到任何页面都会保留
+    QWidget *titleLine = new QWidget(this);
+    titleLine->setObjectName(QStringLiteral("titleLine"));
+    titleLine->setFixedHeight(1);
+    root->addWidget(titleLine);
     root->addWidget(m_stack, 1);
 
     // 录入页保存成功 / 取消 → 回到主界面并刷新列表
@@ -142,7 +152,6 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent)
     m_currentCat.clear(); // 默认「所有类别」：不限分类（与手机端首页一致）
     reloadTable();
 
-    buildAboutOverlay();
     buildLoginOverlay();
 
     // 只有「服务器主机」提供网页查询与手机 App 同步服务；客户端只记录服务器地址
@@ -223,6 +232,48 @@ static QIcon makeTitleIcon(const QString &type)
     return QIcon(pm);
 }
 
+// 搜索框内的一键清除按钮：平时灰色空心圆圈 + 灰叉，悬停/按下时实心红圆 + 红叉
+// （亮红圆上画同色亮红叉会看不见，叉用深红，仍属红色系且对比清晰）
+static QIcon makeClearSearchIcon()
+{
+    static const QColor gray(QStringLiteral("#8A90A6"));
+    static const QColor red(QStringLiteral("#FF5252"));
+    static const QColor darkRed(QStringLiteral("#8E1B1B"));
+    const auto draw = [](bool hover) {
+        const int s = 20;
+        QPixmap pm(s, s);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing);
+        const QRectF circle(2.5, 2.5, 15, 15);
+        if (hover) {
+            p.setPen(Qt::NoPen);
+            p.setBrush(red);
+            p.drawEllipse(circle);
+        } else {
+            p.setBrush(Qt::NoBrush);
+            p.setPen(QPen(gray, 1.6, Qt::SolidLine, Qt::RoundCap));
+            p.drawEllipse(circle);
+        }
+        p.setPen(QPen(hover ? darkRed : gray, 1.8, Qt::SolidLine, Qt::RoundCap));
+        const QRectF r(7, 7, 6, 6);
+        p.drawLine(r.topLeft(), r.bottomRight());
+        p.drawLine(r.topRight(), r.bottomLeft());
+        p.end();
+        return pm;
+    };
+
+    QIcon icon;
+    // 输入框内部按钮在鼠标悬停/按下时会取 Active / Selected 状态的图标
+    const QIcon::State states[] = {QIcon::On, QIcon::Off};
+    for (QIcon::State st : states) {
+        icon.addPixmap(draw(false), QIcon::Normal, st);
+        icon.addPixmap(draw(true), QIcon::Active, st);
+        icon.addPixmap(draw(true), QIcon::Selected, st);
+    }
+    return icon;
+}
+
 // ---------- 标题栏 ----------
 void MainWindow::buildTitleBar()
 {
@@ -242,14 +293,14 @@ void MainWindow::buildTitleBar()
     lay->addWidget(logo);
     lay->addWidget(title);
 
-    // 顶部菜单：主界面 / 录入 / 设置 / 关于（沿用电器盒检测工程风格）
+    // 顶部菜单：主界面 / 录入 / 管理 / 设置 / 工具（沿用电器盒检测工程风格）
     QHBoxLayout *menuLay = new QHBoxLayout();
     menuLay->setSpacing(30);
     menuLay->setContentsMargins(50, 0, 0, 0);
     m_menuGroup = new QButtonGroup(this);
     m_menuGroup->setExclusive(true);
     const QStringList menus = {QStringLiteral("主界面"), QStringLiteral("录入"),
-                               QStringLiteral("管理"), QStringLiteral("设置"), QStringLiteral("关于")};
+                               QStringLiteral("管理"), QStringLiteral("设置"), QStringLiteral("工具")};
     for (int i = 0; i < menus.size(); ++i) {
         QPushButton *b = new QPushButton(menus.at(i), bar);
         b->setObjectName(QStringLiteral("menuBtn"));
@@ -279,9 +330,7 @@ void MainWindow::buildTitleBar()
                 m_userEdit->clear();
                 m_pwdEdit->clear();
                 m_pwdError->clear();
-                m_pwdOverlay->resize(size());
-                m_pwdOverlay->raise();
-                m_pwdOverlay->show();
+                m_pwdOverlay->showOverlay();
                 m_userEdit->setFocus();
                 m_menuGroup->button(m_stack->currentIndex())->setChecked(true);
             }
@@ -296,9 +345,7 @@ void MainWindow::buildTitleBar()
                 m_userEdit->clear();
                 m_pwdEdit->clear();
                 m_pwdError->clear();
-                m_pwdOverlay->resize(size());
-                m_pwdOverlay->raise();
-                m_pwdOverlay->show();
+                m_pwdOverlay->showOverlay();
                 m_userEdit->setFocus();
                 m_menuGroup->button(m_stack->currentIndex())->setChecked(true);
             }
@@ -312,40 +359,48 @@ void MainWindow::buildTitleBar()
                 m_userEdit->clear();
                 m_pwdEdit->clear();
                 m_pwdError->clear();
-                m_pwdOverlay->resize(size());
-                m_pwdOverlay->raise();
-                m_pwdOverlay->show();
+                m_pwdOverlay->showOverlay();
                 m_userEdit->setFocus();
                 m_menuGroup->button(m_stack->currentIndex())->setChecked(true);
             }
             break;
-        case 4: // 关于：半透明遮罩信息卡
-            m_aboutOverlay->resize(size());
-            m_aboutOverlay->raise();
-            m_aboutOverlay->show();
-            m_menuGroup->button(m_stack->currentIndex())->setChecked(true);
+        case 4: // 工具：只查询 ERP 存货档案，不改产品数据库，未登录用户也可直接使用
+            m_toolsPage->onPageShown();
+            m_stack->setCurrentIndex(4);
             break;
         }
     });
 
-    // 登录状态（默认未登录，点击登录/退出）
-    m_loginLabel = new QLabel(bar);
-    m_loginLabel->setObjectName(QStringLiteral("loginLabel"));
+    // 右侧信息列：登录状态 / 服务器地址 / 版本号三行统一放到「服务器」这一列，
+    // 共用 #titleInfo 样式（登录标签的灰色 + 悬停绿色），行间距为 0
+    lay->addStretch();
+    QWidget *infoBox = new QWidget(bar);
+    QVBoxLayout *infoLay = new QVBoxLayout(infoBox);
+    infoLay->setContentsMargins(0, 0, 0, 0);
+    infoLay->setSpacing(0);
+
+    m_loginLabel = new QLabel(infoBox);
+    m_loginLabel->setObjectName(QStringLiteral("titleInfo"));
     m_loginLabel->setCursor(Qt::PointingHandCursor);
     m_loginLabel->setToolTip(QStringLiteral("点击登录或退出"));
-    lay->addWidget(m_loginLabel);
-    lay->addSpacing(10);
-    updateLoginLabel();
     m_loginLabel->installEventFilter(this);
+    infoLay->addWidget(m_loginLabel);
+    updateLoginLabel();
 
-    // 标题栏显示「服务器 / 客户端 + 访问 IP地址」，点一下直接打开网页查询
-    lay->addStretch();
-    m_serverInfo = new QLabel(bar);
-    m_serverInfo->setObjectName(QStringLiteral("serverInfo"));
+    m_serverInfo = new QLabel(infoBox);
+    m_serverInfo->setObjectName(QStringLiteral("titleInfo"));
     m_serverInfo->setCursor(Qt::PointingHandCursor);
     m_serverInfo->setToolTip(QStringLiteral("点击打开网页查询"));
     m_serverInfo->installEventFilter(this);
-    lay->addWidget(m_serverInfo);
+    infoLay->addWidget(m_serverInfo);
+
+    m_versionLabel = new QLabel(infoBox);
+    m_versionLabel->setObjectName(QStringLiteral("titleInfo"));
+    m_versionLabel->setCursor(Qt::PointingHandCursor);
+    m_versionLabel->setToolTip(QStringLiteral("点击检查版本更新"));
+    m_versionLabel->installEventFilter(this);
+    infoLay->addWidget(m_versionLabel);
+    lay->addWidget(infoBox);
     lay->addSpacing(12);
 
     auto mkBtn = [bar](const QString &iconType, const QString &name) {
@@ -392,10 +447,14 @@ void MainWindow::updateServerInfo()
     const QString ip = server ? lanIpAddress() : DatabaseManager::serverHost();
     const int port = server ? m_serverPort : DatabaseManager::serverPort();
     m_accessUrl = QStringLiteral("http://%1:%2").arg(ip).arg(port);
+    // 三行统一「三字标签 + 全角空格 + 值」，右半列起始位置对齐
     m_serverInfo->setText(QStringLiteral("%1　%2:%3")
                               .arg(server ? QStringLiteral("服务器") : QStringLiteral("客户端"),
                                    ip, QString::number(port)));
     m_serverInfo->setToolTip(QStringLiteral("点击打开网页：%1").arg(m_accessUrl));
+    if (m_versionLabel)
+        m_versionLabel->setText(QStringLiteral("版本号　%1")
+                                    .arg(UpdateManager::instance().localVersion()));
 }
 
 void MainWindow::refreshSyncStatus()
@@ -508,6 +567,27 @@ void MainWindow::buildToolBar()
     lay->addWidget(m_cmbDrawingType);
 
     lay->addStretch();
+
+    // 搜索框右侧红色叉号：点一下清空并恢复全部列表；无输入时不显示
+    auto *clearAct = new QAction(makeClearSearchIcon(),
+                                 QStringLiteral("清除搜索内容"), m_searchEdit);
+    clearAct->setToolTip(QStringLiteral("清除搜索内容"));
+    clearAct->setVisible(false);
+    m_searchEdit->addAction(clearAct, QLineEdit::TrailingPosition);
+    // 显式开启内部按钮的鼠标跟踪，保证 QSS :hover 与图标 Active 状态都能生效
+    for (QObject *o : clearAct->associatedObjects()) {
+        if (QWidget *w = qobject_cast<QWidget *>(o)) {
+            w->setAttribute(Qt::WA_Hover, true);
+            w->setCursor(Qt::PointingHandCursor);
+        }
+    }
+    connect(clearAct, &QAction::triggered, this, [this] {
+        m_searchEdit->clear();
+        m_searchEdit->setFocus();
+        onSearch(); // 清空后立刻恢复全部列表，避免表格还停留在过滤结果
+    });
+    connect(m_searchEdit, &QLineEdit::textChanged, this,
+            [clearAct](const QString &s) { clearAct->setVisible(!s.isEmpty()); });
 
     connect(m_btnSearch, &QPushButton::clicked, this, &MainWindow::onSearch);
     connect(m_searchEdit, &QLineEdit::returnPressed, this, &MainWindow::onSearch);
@@ -678,10 +758,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         updatePreviewPixmap();
     if ((watched == m_pdfView || watched == m_pdfView->viewport()) && event->type() == QEvent::Resize)
         QTimer::singleShot(0, this, [this] { refitPdfView(); });
-    if (watched == m_aboutOverlay && event->type() == QEvent::MouseButtonRelease) {
-        m_aboutOverlay->hide(); // 点击遮罩空白处关闭（点到卡片上不会触发这里）
-        return true;
-    }
     if (watched == m_pwdOverlay && event->type() == QEvent::MouseButtonRelease) {
         m_pwdOverlay->hide();
         return true;
@@ -694,9 +770,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             m_userEdit->clear();
             m_pwdEdit->clear();
             m_pwdError->clear();
-            m_pwdOverlay->resize(size());
-            m_pwdOverlay->raise();
-            m_pwdOverlay->show();
+            m_pwdOverlay->showOverlay();
             m_userEdit->setFocus();
         } else {
             // 已登录：确认退出
@@ -730,6 +804,10 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     if (watched == m_serverInfo && event->type() == QEvent::MouseButtonPress) {
         if (!m_accessUrl.isEmpty())
             QDesktopServices::openUrl(QUrl(m_accessUrl)); // 直接打开网页查询
+        return true;
+    }
+    if (watched == m_versionLabel && event->type() == QEvent::MouseButtonPress) {
+        UpdateDialog::checkForUpdate(this);
         return true;
     }
     return QWidget::eventFilter(watched, event);
@@ -1044,7 +1122,9 @@ void MainWindow::previewDrawing(const Drawing &d)
         d.dtype == TypeCountersign ? QStringLiteral("会签图") : QStringLiteral("下发图")));
     m_currentPreviewFile = d.filePath;
     if (d.format == QStringLiteral("pdf")) {
-        // PDF 内置预览（Qt PDF）
+        // PDF 内置预览（Qt PDF）；图片原图一并清掉，避免预览框尺寸变化时
+        // updatePreviewPixmap() 又把上一张图片贴回图片页
+        m_previewPix = QPixmap();
         if (m_pdfDoc->load(d.filePath) == QPdfDocument::Error::None) {
             m_pdfFitSize = QSize(); // 新文档，下一次按当前尺寸重新适配
             m_previewStack->setCurrentWidget(m_pdfView);
@@ -1062,6 +1142,9 @@ void MainWindow::previewDrawing(const Drawing &d)
         const QPixmap pm = QPixmap::fromImage(r.read());
         m_previewPix = pm; // 空图时一并清掉，避免沿用上一张
         m_previewStack->setCurrentWidget(m_previewLabel);
+        // 切换图纸必须先清掉 label 上的旧图：updatePreviewPixmap() 以「缩放后
+        // 尺寸没变」为跳过条件，两张同尺寸图纸切换时会误判而一直显示上一张。
+        m_previewLabel->setPixmap(QPixmap());
         if (pm.isNull())
             m_previewLabel->setText(QStringLiteral("图纸加载失败"));
         else
@@ -1090,8 +1173,10 @@ void MainWindow::updatePreviewPixmap()
 
     const QPixmap scaled = m_previewPix.scaled(box, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     const QPixmap cur = m_previewLabel->pixmap(Qt::ReturnByValue);
+    // 仅「当前已有图 + 尺寸没变」时跳过，避免 setPixmap 引发重复重绘；
+    // 切换图纸时 previewDrawing() 会先清空 label，保证这里必定刷新。
     if (!cur.isNull() && cur.size() == scaled.size() && m_previewLabel->text().isEmpty())
-        return; // 尺寸没变，避免重复缩放引发递归
+        return;
 
     m_previewLabel->setText(QString());
     m_previewLabel->setPixmap(scaled);
@@ -1234,110 +1319,6 @@ void MainWindow::mouseReleaseEvent(QMouseEvent *event)
     QWidget::mouseReleaseEvent(event);
 }
 
-// ---------- 关于窗口：黑色半透明遮罩 + 居中信息卡 ----------
-void MainWindow::buildAboutOverlay()
-{
-    m_aboutOverlay = new QWidget(this);
-    m_aboutOverlay->setObjectName(QStringLiteral("aboutOverlay"));
-    m_aboutOverlay->hide();
-
-    QGridLayout *lay = new QGridLayout(m_aboutOverlay);
-    lay->setContentsMargins(0, 0, 0, 0);
-
-    QWidget *card = new QWidget(m_aboutOverlay);
-    card->setObjectName(QStringLiteral("aboutCard"));
-    card->setFixedSize(720, 680);
-    QVBoxLayout *cl = new QVBoxLayout(card);
-    cl->setContentsMargins(36, 24, 36, 20);
-    cl->setSpacing(6);
-
-    QLabel *logo = new QLabel(card);
-    const QPixmap pm(QStringLiteral(":/image/logo.png"));
-    if (!pm.isNull())
-        logo->setPixmap(pm.scaled(60, 60, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    logo->setAlignment(Qt::AlignCenter);
-
-    QLabel *title = new QLabel(QStringLiteral("南都图纸管理"), card);
-    title->setObjectName(QStringLiteral("aboutTitle"));
-    title->setAlignment(Qt::AlignCenter);
-
-    // 版本号改为构建日期：取可执行文件最后修改时间，每次重新编译链接都会自动更新
-    const QString buildDate = QFileInfo(QCoreApplication::applicationFilePath())
-                                  .lastModified().toString(QStringLiteral("yyyy-MM-dd"));
-
-    // 全局 QSS 给所有 QWidget 上了 #2B3046 背景，滚动区 / 视口 / 内容容器都要显式透明，
-    // 否则卡片中间会出现一块比底色更亮的方框。
-    QScrollArea *scroll = new QScrollArea(card);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setStyleSheet(QStringLiteral("background:transparent;border:none;"));
-    QWidget *infoWrap = new QWidget(scroll);
-    infoWrap->setStyleSheet(QStringLiteral("background:transparent;"));
-    QVBoxLayout *il = new QVBoxLayout(infoWrap);
-    il->setContentsMargins(4, 0, 4, 0);
-    il->setSpacing(0);
-
-    QLabel *info = new QLabel(
-        QStringLiteral("河南南都汽车电子有限公司\n"
-                       "河南省南阳市卧龙区天佑产业园24号楼2楼/3楼/4楼\n"
-                       "开发：侯亚威　18337356560\n"
-                       "构建日期：%1").arg(buildDate), infoWrap);
-    info->setObjectName(QStringLiteral("aboutInfo"));
-    info->setAlignment(Qt::AlignCenter);
-    il->addWidget(info);
-    il->addSpacing(14);
-
-    QFrame *line = new QFrame(infoWrap);
-    line->setObjectName(QStringLiteral("aboutLine"));
-    line->setFixedHeight(1);
-    il->addWidget(line);
-    il->addSpacing(14);
-
-    QLabel *techTitle = new QLabel(QStringLiteral("技术"), infoWrap);
-    techTitle->setObjectName(QStringLiteral("aboutTechTitle"));
-    il->addWidget(techTitle);
-    il->addSpacing(8);
-
-    // 技术按「开发与运行环境 / 功能组件」分组，字号放大、行距放宽，避免一整块小字
-    auto addTechGroup = [&](const QString &group, const QString &text) {
-        QLabel *g = new QLabel(group, infoWrap);
-        g->setObjectName(QStringLiteral("aboutGroup"));
-        QLabel *t = new QLabel(text, infoWrap);
-        t->setObjectName(QStringLiteral("aboutTech"));
-        t->setWordWrap(true);
-        il->addWidget(g);
-        il->addWidget(t);
-        il->addSpacing(10);
-    };
-    addTechGroup(QStringLiteral("开发与运行环境"),
-                 QStringLiteral("Qt 6.8.3 / C++17（MSVC 2022 · MinGW-w64 13.1）\n"
-                                "Qt 组件：Core · Gui · Widgets · Sql · Network · HttpServer · Pdf · PdfWidgets · Svg"));
-    addTechGroup(QStringLiteral("功能组件"),
-                 QStringLiteral("数据与服务：SQLite · Qt HttpServer（内嵌网页 + REST API）\n"
-                                "离线 OCR：PaddleOCR-json（PP-OCRv3 中文模型）\n"
-                                "HEIC 解码：libheif 1.23.7 + libde265 1.1.3（QLibrary 动态加载）\n"
-                                "图纸浏览：Qt Pdf / Qt PdfWidgets / Qt Svg\n"
-                                "安装包：Qt Installer Framework 4.11（binarycreator / windeployqt）"));
-    il->addStretch(1);
-    scroll->setWidget(infoWrap);
-    scroll->viewport()->setStyleSheet(QStringLiteral("background:transparent;"));
-
-    QPushButton *btnOk = new QPushButton(QStringLiteral("确 定"), card);
-    btnOk->setObjectName(QStringLiteral("btnSearch"));
-    btnOk->setFixedSize(140, 40);
-    btnOk->setCursor(Qt::PointingHandCursor);
-    connect(btnOk, &QPushButton::clicked, m_aboutOverlay, &QWidget::hide);
-
-    cl->addWidget(logo);
-    cl->addSpacing(10);
-    cl->addWidget(title);
-    cl->addSpacing(16);
-    cl->addWidget(scroll, 1);
-    cl->addWidget(btnOk, 0, Qt::AlignHCenter);
-    lay->addWidget(card, 0, 0, Qt::AlignCenter);
-
-    m_aboutOverlay->installEventFilter(this); // 点击遮罩空白处关闭，见 eventFilter
-}
 
 // 切换角色后必须重启：服务是否启动、数据库走本地 SQLite 还是服务器，都在启动时决定
 void MainWindow::restartApplication()
@@ -1374,8 +1355,8 @@ void MainWindow::restartApplication()
 // ---------- 登录/验证：黑色半透明遮罩 + 账号密码卡 ----------
 void MainWindow::buildLoginOverlay()
 {
-    m_pwdOverlay = new QWidget(this);
-    m_pwdOverlay->setObjectName(QStringLiteral("aboutOverlay")); // 复用遮罩样式
+    m_pwdOverlay = new OverlayMask(this);
+    m_pwdOverlay->enableOverlay(); // 全屏半透明黑遮罩，与其它弹窗统一
     m_pwdOverlay->hide();
 
     QGridLayout *lay = new QGridLayout(m_pwdOverlay);
@@ -1498,19 +1479,17 @@ void MainWindow::updateLoginLabel()
 {
     if (!m_loginLabel) return;
     if (m_currentUser.isEmpty())
-        m_loginLabel->setText(QStringLiteral("未登录（点击登录）"));
+        m_loginLabel->setText(QStringLiteral("未登录　点击登录"));
     else
-        m_loginLabel->setText(QStringLiteral("已登录：%1%2").arg(m_currentUser)
+        m_loginLabel->setText(QStringLiteral("已登录　%1%2").arg(m_currentUser)
                                   .arg(m_isAdmin ? QStringLiteral("（管理员）") : QString()));
 }
 
 void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
-    if (m_aboutOverlay)
-        m_aboutOverlay->resize(event->size());
-    if (m_pwdOverlay)
-        m_pwdOverlay->resize(event->size());
+    if (m_pwdOverlay && m_pwdOverlay->isVisible())
+        m_pwdOverlay->syncOverlay(); // 屏幕/窗口变化后重新贴合整块屏幕
     // 窗口尺寸变化后按强制比例重排左右两栏（普通 3:2、最大化/全屏 1:1）
     QTimer::singleShot(0, this, [this] { applySplitRatio(); });
 }
@@ -1528,6 +1507,12 @@ void MainWindow::applyStyle()
     qApp->setStyleSheet(QStringLiteral(R"(
 QWidget { background:#2B3046; color:#ffffff; font-size:14px; }
 #titleBar { background:#2B3046; }
+/* 菜单栏下方浅灰细线：所有页面共用 */
+#titleLine { background:rgba(255,255,255,0.08); border:none; }
+/* 标题栏右侧信息列：登录状态 / 服务器地址 / 版本号
+   三行统一字号与颜色（登录标签的灰色），悬停/点击可操作项变绿 */
+#titleInfo { background:transparent; color:#9FB0C9; font-size:13px; padding:0 8px; }
+#titleInfo:hover { color:#43CF7C; }
 #appTitle { color:white; font-size:25px; }
 #menuBtn { color:white; font-size:17px; border-radius:0px; background:transparent; border:none; }
 #menuBtn:checked { color:#1a67c0; background:#273d64; border-bottom:1px solid #1673db; }
@@ -1547,10 +1532,16 @@ QTabBar::tab { background:transparent; color:#ffffff; font-size:16px;
                padding:10px 26px; border:none; }
 QTabBar::tab:hover:!selected { color:#43CF7C; }
 QTabBar::tab:selected { color:#43CF7C; background:#1E3B2C; border-bottom:2px solid #43CF7C; }
-#toolBar { background:#2B3046; border-top:1px solid rgba(255,255,255,0.08); }
+/* 主界面顶部细线已由共用 #titleLine 提供，这里不再重复描边 */
+#toolBar { background:#2B3046; }
 QLineEdit { background:#22293C; border:1px solid #4A5468;
             border-radius:8px; padding:6px 10px; color:#fff; }
 QLineEdit:focus { border:1px solid #43CF7C; }
+/* 输入框内的一键清除按钮：透明底，避免深色主题下出现方块背景 */
+QLineEdit QToolButton { background:transparent; border:none; padding:2px;
+                        border-radius:10px; }
+QLineEdit QToolButton:hover { background:rgba(255,82,82,0.16); }
+QLineEdit QToolButton:pressed { background:rgba(255,82,82,0.30); }
 QPushButton#btnSearch, #btnEntry { background:#43CF7C; color:#0B1F14; border:none;
             border-radius:8px; padding:7px 18px; font-weight:bold; }
 QPushButton#btnSearch:hover, #btnEntry:hover { background:#5CE0A0; }
@@ -1560,8 +1551,8 @@ QPushButton#btnEntry:disabled { background:rgba(67,207,124,0.3); color:rgba(11,3
 #btnDanger:hover { background:#C9606A; }
 #btnDanger:pressed { background:#B05560; }
 #pwdError { background:transparent; color:#E06C75; font-size:12px; }
-#loginLabel { background:transparent; color:#9FB0C9; font-size:14px; padding:0 8px; }
-#loginLabel:hover { color:#43CF7C; }
+/* 检查更新卡片中的状态/提示文字（与登录卡的深色卡片配套） */
+#updateStatus { background:transparent; color:rgba(255,255,255,0.78); font-size:13px; }
 #btnGhost { background:transparent; border:1px solid #4A5468;
             color:rgba(255,255,255,0.85); border-radius:8px; padding:7px 18px; }
 QComboBox { background:#22293C; border:1px solid #4A5468;
@@ -1594,6 +1585,10 @@ QHeaderView::section { background:#22293C; color:rgba(255,255,255,0.55);
 #preview { background:#22293C; border:1px dashed #4A5468;
            border-radius:8px; color:rgba(255,255,255,0.5); }
 #previewInfo { color:rgba(255,255,255,0.5); font-size:12px; }
+/* 上传/下载安装包进度条 */
+QProgressBar { background:#22293C; border:1px solid #4A5468; border-radius:6px;
+               height:18px; text-align:center; color:#ffffff; }
+QProgressBar::chunk { background:#43CF7C; border-radius:5px; }
 #dtypeLabel { color:#cfd3e0; font-size:13px; }
 #detailBlk { background:#22293C; border:1px solid #4A5468;
              border-radius:8px; color:rgba(255,255,255,0.85); padding:6px; }
@@ -1630,8 +1625,8 @@ QMenu::item { background:transparent; padding:6px 26px 6px 18px; border-radius:6
 QMenu::item:selected { background:#1E3B2C; color:#43CF7C; }
 QMenu::separator { height:1px; background:rgba(255,255,255,0.10); margin:5px 10px; }
 
-/* 关于窗口 */
-#aboutOverlay { background:rgba(0,0,0,153); }
+/* 工具页「关于」tab 的信息卡片；#aboutOverlay 保留兼容，实际遮罩统一由 OverlayMask 绘制 */
+#aboutOverlay { background:rgba(0,0,0,179); }
 #aboutCard { background:#22293C; border:1px solid rgba(255,255,255,0.14); border-radius:14px; }
 #aboutCard QLabel { background:transparent; }
 #aboutCard QScrollArea, #aboutCard QScrollArea > QWidget > QWidget { background:transparent; }
@@ -1641,6 +1636,5 @@ QMenu::separator { height:1px; background:rgba(255,255,255,0.10); margin:5px 10p
 #aboutGroup { color:rgba(255,255,255,0.62); font-size:13px; font-weight:bold; }
 #aboutTech { color:rgba(255,255,255,0.92); font-size:15px; line-height:1.85; }
 #aboutLine { background:rgba(255,255,255,0.14); border:none; }
-#aboutCard QPushButton { font-size:15px; }
 )"));
 }

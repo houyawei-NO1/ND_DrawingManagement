@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Installer>
     <Name>南都图纸管理</Name>
-    <Version>1.0.0</Version>
+    <Version>1.2026.11.9</Version>
     <Title>南都图纸管理 安装向导</Title>
     <Publisher>南都</Publisher>
     <StartMenuDir>南都</StartMenuDir>
-    <TargetDir>@ApplicationsDir@/ND_DrawingManagement_PC</TargetDir>
+    <!-- 默认安装到 D 盘；首次安装时向导可选目录，已有安装时 installscript.qs 隐藏该页以直接覆盖（<Version> 按构建日期递增） -->
+    <TargetDir>D:/Program Files/ND_DrawingManagement_PC</TargetDir>
     <WizardStyle>Classic</WizardStyle>
     <StyleSheet>style.qss</StyleSheet>
     <TitleColor>#FFFFFF</TitleColor>

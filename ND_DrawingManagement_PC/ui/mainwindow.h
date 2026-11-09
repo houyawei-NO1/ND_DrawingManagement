@@ -2,6 +2,7 @@
 #define MAINWINDOW_H
 
 #include <QWidget>
+#include "overlaymask.h"
 #include <QList>
 #include <QTimer>
 #include "model/product.h"
@@ -24,6 +25,7 @@ class LanHttpServer;
 class EntryDialog;
 class ManagePage;
 class SettingsDialog;
+class ToolsPage;
 
 // 主窗口：无边框深色风格，分类Tab + 搜索 + 列表 + 图纸预览
 class MainWindow : public QWidget
@@ -57,7 +59,6 @@ private:
     void buildCategoryTabs();
     void buildToolBar();
     void buildBody();
-    void buildAboutOverlay();   // 关于窗口：半透明遮罩 + 信息卡
     void buildLoginOverlay();   // 登录验证：半透明遮罩 + 账号密码卡
     void doLogin();             // 登录成功后更新状态并跳转
     void updateLoginLabel();    // 刷新标题栏登录状态
@@ -77,7 +78,7 @@ private:
     bool m_restarting = false; // 切换角色重启中：防止按钮连点启动多个进程
 
     // 分类
-    QButtonGroup *m_menuGroup = nullptr; // 顶部菜单（主界面/设置/关于）
+    QButtonGroup *m_menuGroup = nullptr; // 顶部菜单（主界面/录入/管理/设置/工具）
     QButtonGroup *m_catGroup = nullptr;
     QString m_currentCat;
 
@@ -113,21 +114,21 @@ private:
     QSplitter *m_split = nullptr;          // 列表 / 预览的分割器（左侧宽度按列宽自适应）
 
     LanHttpServer *m_httpServer = nullptr;
-    QWidget *m_aboutOverlay = nullptr;
-    QWidget *m_pwdOverlay = nullptr;   // 登录/验证遮罩
+    OverlayMask *m_pwdOverlay = nullptr; // 登录/验证全屏遮罩
     QLabel *m_pwdTitle = nullptr;
     QLineEdit *m_userEdit = nullptr;
     QLineEdit *m_pwdEdit = nullptr;
     QLabel *m_pwdError = nullptr;
-    int m_pwdTargetPage = 1; // 验证通过后进入的页面：1录入 2管理 3仅登录
+    int m_pwdTargetPage = 1; // 验证通过后进入的页面：1录入 2管理 3设置（工具页免验证）
 
     // 登录状态
     QLabel *m_loginLabel = nullptr;
     QString m_currentUser;
     bool m_isAdmin = false;
 
-    // 局域网服务器信息（标题栏显示，可点击复制）
+    // 局域网服务器信息（标题栏显示，可点击复制）+ 下一行版本号（点击检查更新）
     QLabel *m_serverInfo = nullptr;
+    QLabel *m_versionLabel = nullptr;
     quint16 m_serverPort = 0;
     QString m_accessUrl;
     void updateServerInfo(); // 刷新标题栏显示的局域网IP与端口
@@ -137,11 +138,12 @@ private:
     QLabel *m_clientStatusLabel = nullptr;  // 状态栏右侧：已连接客户端 IP（仅服务器显示）
     QTimer *m_syncTimer = nullptr;
 
-    // 页面切换：0主界面 1录入 2管理 3设置
+    // 页面切换：0主界面 1录入 2管理 3设置 4工具
     QStackedWidget *m_stack = nullptr;
     EntryDialog *m_entryPage = nullptr;
     ManagePage *m_managePage = nullptr;
     SettingsDialog *m_settingsPage = nullptr;
+    ToolsPage *m_toolsPage = nullptr;
 };
 
 #endif // MAINWINDOW_H

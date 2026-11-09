@@ -14,13 +14,12 @@
 
 NdMessageBox::NdMessageBox(QWidget *parent, Kind kind, const QString &title,
                            const QString &text, bool blueOk, int width)
-    : QWidget(parent ? parent->window() : nullptr)
+    : OverlayMask(parent ? parent->window() : nullptr)
 {
     setObjectName(QStringLiteral("ndMsgMask"));
     setFocusPolicy(Qt::StrongFocus);
-    setAttribute(Qt::WA_StyledBackground, true);
+    enableOverlay(); // 全屏半透明黑遮罩由 OverlayMask 统一提供
     setStyleSheet(QStringLiteral(
-        "QWidget#ndMsgMask{background:rgba(0,0,0,0.55);}"
         "QWidget#ndMsgCard{background:#22293C;border:1px solid rgba(255,255,255,0.12);"
         "border-radius:12px;}"
         "QWidget#ndMsgCard QLabel{background:transparent;}"
@@ -90,13 +89,7 @@ bool NdMessageBox::run(QWidget *parent, Kind kind, const QString &title, const Q
                        bool blueOk, int width)
 {
     NdMessageBox box(parent, kind, title, text, blueOk, width);
-    QWidget *host = parent ? parent->window() : nullptr;
-    if (host)
-        box.setGeometry(QRect(QPoint(0, 0), host->size()));
-    else if (QScreen *screen = QApplication::primaryScreen())
-        box.setGeometry(screen->geometry());
-    box.show();
-    box.raise();
+    box.showOverlay(); // 统一全屏遮罩，不再按父窗口尺寸裁剪
     box.setFocus();
 
     QEventLoop loop;

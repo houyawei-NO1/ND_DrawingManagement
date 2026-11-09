@@ -16,6 +16,7 @@ class QPlainTextEdit;
 class QCheckBox;
 class QButtonGroup;
 class QPushButton;
+class QProgressBar;
 class LanHttpServer;
 
 // 设置页：服务器主机显示全部管理 tab；客户端只显示「服务器连接」
@@ -64,6 +65,12 @@ private slots:
     void onAutoBackupToggled(bool on);
     void onAutoBackupTimeChanged();
     void checkAutoBackup();
+    // 版本管理
+    void refreshUpdateInfo();
+    void onPickUpdatePackage();
+    void onUploadUpdatePackage();
+    void onPickAndroidPackage();
+    void onUploadAndroidPackage();
 
 private:
     void buildFieldTab();
@@ -74,7 +81,8 @@ private:
     void buildBackupTab();
     void buildConnectionTab(); // 客户端：服务器地址与角色说明
     void buildRoleTab();       // 所有角色：切换本机角色（服务器主机 / 客户端）
-    void buildOpLogTab();      // 服务器主机：近一周用户操作日志
+    void buildOpLogTab();      // 服务器/客户端：近一周用户操作日志（客户端只读）
+    void buildVersionTab();    // 服务器 / 客户端：安装包上传与版本查看
     bool saveRoleChoice(bool restart); // 写入 QSettings，restart=true 时发出 roleChanged()
     void refreshFieldTable();
     void refreshUserTable();
@@ -124,6 +132,18 @@ private:
 
     // 用户日志
     QTableWidget *m_opLogTable = nullptr;
+
+    // 版本管理
+    QLabel *m_lblUpdateInfo = nullptr;
+    QLabel *m_lblUpdateFile = nullptr;
+    QLabel *m_lblUpdateStatus = nullptr;
+    QProgressBar *m_barUpdate = nullptr;
+    QString m_updateFilePath;
+    bool m_updateInfoLoaded = false;
+    // 手机 APK
+    QLabel *m_lblMobileInfo = nullptr;
+    QLabel *m_lblMobileFile = nullptr;
+    QString m_androidFilePath;
 
     // 导入
     QComboBox *m_cmbImportCat = nullptr;

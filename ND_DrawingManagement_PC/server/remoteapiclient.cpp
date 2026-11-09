@@ -388,6 +388,28 @@ QList<FieldConfig> RemoteApiClient::fieldConfigs(const QString &category) const
     return list;
 }
 
+QList<OpLog> RemoteApiClient::opLogs(const QDateTime &since) const
+{
+    QJsonObject args;
+    args[QStringLiteral("since")] = since.toString(Qt::ISODate);
+    const QJsonObject res = readAction(QStringLiteral("list_op_logs"), args, nullptr);
+    QList<OpLog> list;
+    for (const QJsonValue &v : res.value(QStringLiteral("items")).toArray()) {
+        const QJsonObject o = v.toObject();
+        OpLog l;
+        l.id = o.value(QStringLiteral("id")).toInt(-1);
+        l.oper = o.value(QStringLiteral("oper")).toString();
+        l.action = o.value(QStringLiteral("action")).toString();
+        l.model = o.value(QStringLiteral("model")).toString();
+        l.name = o.value(QStringLiteral("name")).toString();
+        l.detail = o.value(QStringLiteral("detail")).toString();
+        l.createdAt = QDateTime::fromString(
+            o.value(QStringLiteral("created_at")).toString(), Qt::ISODate);
+        list << l;
+    }
+    return list;
+}
+
 QList<Product> RemoteApiClient::searchProducts(const QString &category,
                                                const QString &keyword, int drawingType) const
 {
@@ -668,4 +690,69 @@ bool RemoteApiClient::changeUserPassword(int id, const QString &newPassword, QSt
     args[QStringLiteral("id")] = id;
     args[QStringLiteral("password")] = newPassword;
     return !writeAction(QStringLiteral("change_user_password"), args, err).isEmpty();
+}
+
+// ==================== ERP 库存档案 ====================
+QList<StockBatch> RemoteApiClient::stockBatches(QString *err) const
+{
+    const QJsonObject res = readAction(QStringLiteral("list_stock_batches"),
+                                       QJsonObject(), err);
+    QList<StockBatch> out;
+    for (const QJsonValue &v : res.value(QStringLiteral("items")).toArray()) {
+        const QJsonObject o = v.toObject();
+        StockBatch b;
+        b.key = o.value(QStringLiteral("key")).toString();
+        b.fileName = o.value(QStringLiteral("file_name")).toString();
+        b.label = o.value(QStringLiteral("label")).toString();
+        b.rows = o.value(QStringLiteral("rows")).toInt();
+        b.importedAt = o.value(QStringLiteral("imported_at")).toString();
+        out.append(b);
+    }
+    return out;
+}
+
+QList<QStringList> RemoteApiClient::stockSearch(const QString &batchKey,
+                                                const QString &keyword, int limit,
+                                                int *total, QString *err) const
+{
+    if (total) *total = 0;
+    QJsonObject args;
+    args[QStringLiteral("batch")] = batchKey;
+    args[QStringLiteral("keyword")] = keyword;
+    args[QStringLiteral("limit")] = limit;
+    const QJsonObject res = readAction(QStringLiteral("search_stock_archive"), args, err);
+    if (total) *total = res.value(QStringLiteral("total")).toInt();
+    QList<QStringList> out;
+    for (const QJsonValue &v : res.value(QStringLiteral("items")).toArray()) {
+        QStringList row;
+        for (const QJsonValue &c : v.toArray())
+            row.append(c.toString());
+        out.append(row);
+    }
+    return out;
+}
+
+bool RemoteApiClient::importStockFile(const QString &srcPath,
+                                      const QString &originalName, QString *err)
+{
+    QFile f(srcPath);
+    if (!f.open(QIODevice::ReadOnly)) {
+        if (err) *err = QStringLiteral("无法读取表格文件：%1").arg(srcPath);
+        return false;
+    }
+    const QByteArray bytes = f.readAll();
+    f.close();
+    const QString fileName = QFileInfo(originalName.isEmpty() ? srcPath : originalName).fileName();
+    QJsonObject args;
+    args[QStringLiteral("data")] = QString::fromLatin1(bytes.toBase64());
+    args[QStringLiteral("filename")] = fileName;
+    // 表格几 MB，base64 后更大，超时放宽到 120 秒
+    return !writeAction(QStringLiteral("import_stock_archive"), args, err, 120000).isEmpty();
+}
+
+bool RemoteApiClient::deleteStockBatch(const QString &key, QString *err)
+{
+    QJsonObject args;
+    args[QStringLiteral("key")] = key;
+    return !writeAction(QStringLiteral("delete_stock_archive"), args, err).isEmpty();
 }

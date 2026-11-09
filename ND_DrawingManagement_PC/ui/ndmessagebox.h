@@ -1,14 +1,14 @@
 #ifndef NDMESSAGEBOX_H
 #define NDMESSAGEBOX_H
 
-#include <QWidget>
+#include "overlaymask.h"
 
 class QEventLoop;
 class QEvent;
 class QKeyEvent;
 
-// 统一小提示窗：黑色半透明蒙版 + 深色卡片，与“关于”窗口同风格
-class NdMessageBox : public QWidget
+// 统一小提示窗：全屏半透明黑遮罩 + 深色卡片，与「选择本机角色」同风格
+class NdMessageBox : public OverlayMask
 {
 public:
     enum Kind { Info, Warning, Error, Question };

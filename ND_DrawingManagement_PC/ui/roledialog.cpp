@@ -15,20 +15,17 @@
 #include <QPainter>
 
 RoleSelectDialog::RoleSelectDialog(const RoleChoice &current, QWidget *parent)
-    : QWidget(parent)
+    : OverlayMask(parent)
 {
     m_result = current;
     m_result.ok = false;
 
-    // 顶层无边框窗口 + 真正透明背景，遮罩才能覆盖整个屏幕
-    setWindowFlags(Qt::FramelessWindowHint | Qt::Window | Qt::WindowStaysOnTopHint);
-    setAttribute(Qt::WA_TranslucentBackground, true);
-    setAttribute(Qt::WA_StyledBackground, true);
+    // 全屏半透明黑遮罩由 OverlayMask 统一提供（窗口标志、透明背景、绘制）
+    enableOverlay();
     setWindowTitle(QStringLiteral("选择本机角色"));
     setObjectName(QStringLiteral("roleMask"));
     setFocusPolicy(Qt::StrongFocus);
     setStyleSheet(QStringLiteral(
-        "QWidget#roleMask{background:rgba(0,0,0,0.62);}"
         "QWidget#roleCard{background:#22293C;border:1px solid rgba(255,255,255,0.14);"
         "border-radius:12px;}"
         "QWidget#roleCard QLabel{background:transparent;color:rgba(255,255,255,0.85);"
@@ -177,11 +174,7 @@ void RoleSelectDialog::finish(bool ok)
 RoleChoice RoleSelectDialog::choose(const RoleChoice &current)
 {
     RoleSelectDialog box(current);
-    if (QScreen *screen = QApplication::primaryScreen())
-        box.setGeometry(screen->geometry()); // 遮罩铺满整块屏幕
-    box.show();
-    box.raise();
-    box.activateWindow();
+    box.showOverlay(); // 铺满整块屏幕，与程序内其它遮罩一致
     box.setFocus();
 
     QEventLoop loop;
@@ -189,13 +182,6 @@ RoleChoice RoleSelectDialog::choose(const RoleChoice &current)
     loop.exec();
     box.m_loop = nullptr;
     return box.m_result;
-}
-
-void RoleSelectDialog::paintEvent(QPaintEvent *)
-{
-    QPainter p(this);
-    // 整个窗口铺一层半透明黑，背后所有内容变暗，聚焦到中央卡片
-    p.fillRect(rect(), QColor(0, 0, 0, 179)); // 179/255 ≈ 0.70
 }
 
 void RoleSelectDialog::keyPressEvent(QKeyEvent *event)

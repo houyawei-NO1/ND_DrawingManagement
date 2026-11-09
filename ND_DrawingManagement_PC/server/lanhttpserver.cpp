@@ -1,5 +1,6 @@
 #include "lanhttpserver.h"
 #include "db/databasemanager.h"
+#include "updatemanager.h"
 
 #include <QHttpServer>
 #include <QHttpServerRequest>
@@ -284,6 +285,21 @@ LanHttpServer::LanHttpServer(QObject *parent) : QObject(parent)
     m_http->route(QStringLiteral("/api/write"),
                   QHttpServerRequest::Method::Post,
                   [this](const QHttpServerRequest &req) { return handleWrite(req); });
+
+    // ===== 版本管理：安装包只保存在服务器工作路径，PC 与手机 APK 各一份 =====
+    m_http->route(QStringLiteral("/api/update/info"),
+                  QHttpServerRequest::Method::Post,
+                  [this](const QHttpServerRequest &req) { return handleUpdateInfo(req); });
+    m_http->route(QStringLiteral("/api/update/upload"),
+                  QHttpServerRequest::Method::Post,
+                  [this](const QHttpServerRequest &req) { return handleUpdateUpload(req); });
+    m_http->route(QStringLiteral("/api/update/package"),
+                  [this] { return handleUpdatePackage(); });
+    // 手机 APP 检查更新/下载 APK：同一局域网内免登录
+    m_http->route(QStringLiteral("/api/update/android/info"),
+                  [this] { return handleAndroidInfo(); });
+    m_http->route(QStringLiteral("/api/update/android/package"),
+                  [this] { return handleAndroidPackage(); });
 }
 
 QDateTime LanHttpServer::parseSince(const QString &s)
@@ -435,6 +451,37 @@ QHttpServerResponse LanHttpServer::handleData(const QHttpServerRequest &req)
         extra[QStringLiteral("items")] = arr;
         return jsonOk(extra);
     }
+    // ERP 库存档案：只读查询，服务器本机与 PC 客户端共用
+    if (action == QLatin1String("list_stock_batches")) {
+        QJsonArray arr;
+        for (const StockBatch &s : db.stockBatches()) {
+            QJsonObject o;
+            o[QStringLiteral("key")] = s.key;
+            o[QStringLiteral("file_name")] = s.fileName;
+            o[QStringLiteral("label")] = s.label;
+            o[QStringLiteral("rows")] = s.rows;
+            o[QStringLiteral("imported_at")] = s.importedAt;
+            arr.append(o);
+        }
+        extra[QStringLiteral("items")] = arr;
+        return jsonOk(extra);
+    }
+    if (action == QLatin1String("search_stock_archive")) {
+        int total = 0;
+        const QList<QStringList> rows = db.stockSearch(
+            b.value(QStringLiteral("batch")).toString(),
+            b.value(QStringLiteral("keyword")).toString(),
+            b.value(QStringLiteral("limit")).toInt(300), &total);
+        QJsonArray arr;
+        for (const QStringList &row : rows) {
+            QJsonArray line;
+            for (const QString &c : row) line.append(c);
+            arr.append(line);
+        }
+        extra[QStringLiteral("items")] = arr;
+        extra[QStringLiteral("total")] = total;
+        return jsonOk(extra);
+    }
     if (action == QLatin1String("list_users")) {
         QJsonArray arr;
         const auto users = db.listUsers();
@@ -442,6 +489,27 @@ QHttpServerResponse LanHttpServer::handleData(const QHttpServerRequest &req)
             QJsonObject o;
             o[QStringLiteral("id")] = u.first;
             o[QStringLiteral("name")] = u.second;
+            arr.append(o);
+        }
+        extra[QStringLiteral("items")] = arr;
+        return jsonOk(extra);
+    }
+    // 用户操作日志只在服务器落库，客户端「设置 → 用户日志」通过这里只读查看
+    if (action == QLatin1String("list_op_logs")) {
+        const QDateTime since = QDateTime::fromString(
+            b.value(QStringLiteral("since")).toString(), Qt::ISODate);
+        QJsonArray arr;
+        const QList<OpLog> logs = db.opLogs(since.isValid()
+            ? since : QDateTime::currentDateTime().addDays(-7));
+        for (const OpLog &l : logs) {
+            QJsonObject o;
+            o[QStringLiteral("id")] = l.id;
+            o[QStringLiteral("oper")] = l.oper;
+            o[QStringLiteral("action")] = l.action;
+            o[QStringLiteral("model")] = l.model;
+            o[QStringLiteral("name")] = l.name;
+            o[QStringLiteral("detail")] = l.detail;
+            o[QStringLiteral("created_at")] = l.createdAt.toString(Qt::ISODate);
             arr.append(o);
         }
         extra[QStringLiteral("items")] = arr;
@@ -556,6 +624,42 @@ QHttpServerResponse LanHttpServer::handleWrite(const QHttpServerRequest &req)
         QFile::remove(tmp);
         if (!ok)
             return jsonErr(err.isEmpty() ? QStringLiteral("图纸保存失败") : err);
+        return jsonOk();
+    }
+    // ERP 库存档案导入：客户端把整份 .xls 以 base64 传上来，服务器落到数据库文件夹
+    if (action == QLatin1String("import_stock_archive")) {
+        const QByteArray data = QByteArray::fromBase64(
+            b.value(QStringLiteral("data")).toString().toLatin1());
+        if (data.isEmpty())
+            return jsonErr(QStringLiteral("表格内容为空"));
+        const QString upName = QFileInfo(
+            b.value(QStringLiteral("filename")).toString()).fileName();
+        if (upName.isEmpty())
+            return jsonErr(QStringLiteral("表格文件名无效"));
+        if (QFileInfo(upName).suffix().compare(QStringLiteral("xls"), Qt::CaseInsensitive) != 0)
+            return jsonErr(QStringLiteral("仅支持 Excel 97-2003 的 .xls 文件"));
+        const QString tmp = QDir::tempPath() + QStringLiteral("/nd_stock_%1.xls")
+            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+        QFile f(tmp);
+        if (!f.open(QIODevice::WriteOnly))
+            return jsonErr(QStringLiteral("服务器无法写入临时文件"));
+        const bool written = f.write(data) == data.size();
+        f.close();
+        if (!written) {
+            QFile::remove(tmp);
+            return jsonErr(QStringLiteral("服务器写入临时文件失败"));
+        }
+        const bool ok = db.importStockFile(tmp, upName, &err);
+        QFile::remove(tmp);
+        if (!ok)
+            return jsonErr(err.isEmpty() ? QStringLiteral("库存档案导入失败") : err);
+        QJsonObject res;
+        res[QStringLiteral("key")] = QFileInfo(upName).completeBaseName();
+        return jsonOk(res);
+    }
+    if (action == QLatin1String("delete_stock_archive")) {
+        if (!db.deleteStockBatch(b.value(QStringLiteral("key")).toString(), &err))
+            return jsonErr(err.isEmpty() ? QStringLiteral("删除库存档案失败") : err);
         return jsonOk();
     }
     if (action == QLatin1String("update_drawing_meta")) {
@@ -777,6 +881,162 @@ QHttpServerResponse LanHttpServer::syncFile(const QString &relPath, const QHttpS
         return resp;
     }
     // GET：同样关闭持久连接，确保每张图都是独立连接
+    QHttpServerResponse resp = QHttpServerResponse::fromFile(abs);
+    QHttpHeaders hdr = resp.headers();
+    hdr.append(QHttpHeaders::WellKnownHeader::Connection, QByteArrayLiteral("close"));
+    resp.setHeaders(hdr);
+    return resp;
+}
+
+// ===== 版本管理：安装包分发 =====
+QHttpServerResponse LanHttpServer::handleUpdateInfo(const QHttpServerRequest &req)
+{
+    // 兼容旧客户端的空 body；kind=android 时返回手机 APK 的元数据
+    QJsonObject b;
+    parseBody(req, &b);
+    const PackageKind kind = b.value(QStringLiteral("kind")).toString() == QLatin1String("android")
+                                 ? PackageKind::Android : PackageKind::Pc;
+    const UpdateInfo info = UpdateManager::readLocalMeta(kind);
+    QJsonObject o;
+    o[QStringLiteral("available")] = info.available;
+    o[QStringLiteral("version")] = info.version;
+    o[QStringLiteral("build_stamp")] = info.buildStamp;
+    o[QStringLiteral("file")] = info.fileName;
+    o[QStringLiteral("size")] = info.size;
+    o[QStringLiteral("uploaded_at")] = info.uploadedAt;
+    return jsonOk(o);
+}
+
+QHttpServerResponse LanHttpServer::handleUpdateUpload(const QHttpServerRequest &req)
+{
+    QJsonObject b;
+    if (!parseBody(req, &b))
+        return jsonErr(QStringLiteral("请求格式错误"));
+    if (!validToken(b.value(QStringLiteral("token")).toString()))
+        return jsonErr(QStringLiteral("登录已失效，请重新登录后再上传安装包"));
+
+    // kind=android 走手机 APK，其余（含旧客户端未带 kind）按 PC 安装包处理
+    const QString kindTag = b.value(QStringLiteral("kind")).toString(QStringLiteral("pc"));
+    const PackageKind kind = kindTag == QLatin1String("android")
+                                 ? PackageKind::Android : PackageKind::Pc;
+    const QString ext = kind == PackageKind::Android
+                            ? QStringLiteral(".apk") : QStringLiteral(".exe");
+    // 只取文件名，杜绝 ../ 之类的路径穿越；必须是对应格式的安装包
+    const QString name = QFileInfo(b.value(QStringLiteral("name")).toString()).fileName();
+    if (name.isEmpty() || !name.endsWith(ext, Qt::CaseInsensitive))
+        return jsonErr(QStringLiteral("安装包文件名不合法"));
+    const qint64 size = static_cast<qint64>(b.value(QStringLiteral("size")).toDouble());
+    const qint64 offset = static_cast<qint64>(b.value(QStringLiteral("offset")).toDouble());
+    const QByteArray chunk = QByteArray::fromBase64(
+        b.value(QStringLiteral("chunk")).toString().toLatin1());
+    const bool final = b.value(QStringLiteral("final")).toBool();
+    if (size <= 0 || offset < 0 || chunk.isEmpty())
+        return jsonErr(QStringLiteral("上传数据不完整"));
+
+    const QString dir = UpdateManager::packageDirectory();
+    if (dir.isEmpty() || !QDir().mkpath(dir))
+        return jsonErr(QStringLiteral("无法创建服务器安装包目录"));
+    const QString part = UpdateManager::partFilePath(kind);
+
+    // 先写 .uploading.part，最后一块成功才替换正式包：上传中断不会破坏现有安装包
+    if (offset == 0) {
+        QFile::remove(part);
+        m_uploadOffset = 0;
+        m_uploadName = name;
+        m_uploadKind = kindTag;
+        m_uploadVersion = b.value(QStringLiteral("version")).toString();
+        m_uploadStamp = b.value(QStringLiteral("build_stamp")).toString();
+        m_uploadSize = size;
+    } else if (offset != m_uploadOffset || name != m_uploadName
+               || kindTag != m_uploadKind) {
+        return jsonErr(QStringLiteral("上传分块不连续，请重新上传"));
+    }
+
+    QFile f(part);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Append))
+        return jsonErr(QStringLiteral("无法写入上传临时文件"));
+    const bool written = f.write(chunk) == chunk.size();
+    f.close();
+    if (!written) {
+        QFile::remove(part);
+        m_uploadOffset = 0;
+        return jsonErr(QStringLiteral("写入失败，服务器磁盘空间可能不足"));
+    }
+    m_uploadOffset += chunk.size();
+
+    if (!final) {
+        QJsonObject o;
+        o[QStringLiteral("offset")] = m_uploadOffset;
+        return jsonOk(o);
+    }
+
+    const QString target = QDir(dir).filePath(m_uploadName);
+    if (m_uploadOffset != m_uploadSize || !QFileInfo::exists(part)) {
+        QFile::remove(part);
+        m_uploadOffset = 0;
+        return jsonErr(QStringLiteral("安装包大小不一致，请重新上传"));
+    }
+    if (QFile::exists(target) && !QFile::remove(target)) {
+        QFile::remove(part);
+        m_uploadOffset = 0;
+        return jsonErr(QStringLiteral("旧安装包正在被占用，请稍后重试"));
+    }
+    if (!QFile::rename(part, target)) {
+        QFile::remove(part);
+        m_uploadOffset = 0;
+        return jsonErr(QStringLiteral("安装包保存失败"));
+    }
+    // 同类型安装包只保留一份（PC 的 exe 与手机 apk 互不清理）
+    const QFileInfoList others = QDir(dir).entryInfoList(
+        QStringList() << (kind == PackageKind::Android
+                              ? QStringLiteral("*.apk") : QStringLiteral("*.exe")),
+        QDir::Files);
+    for (const QFileInfo &fi : others) {
+        if (fi.absoluteFilePath() != target)
+            QFile::remove(fi.absoluteFilePath());
+    }
+    QString err;
+    if (!UpdateManager::writeLocalMeta(m_uploadName, m_uploadVersion, m_uploadStamp,
+                                       m_uploadSize, &err, kind)) {
+        m_uploadOffset = 0;
+        return jsonErr(err.isEmpty() ? QStringLiteral("版本信息写入失败") : err);
+    }
+    m_uploadOffset = 0;
+    return jsonOk();
+}
+
+QHttpServerResponse LanHttpServer::handleUpdatePackage() const
+{
+    const QString abs = UpdateManager::localPackagePath();
+    if (abs.isEmpty() || !QFileInfo::exists(abs))
+        return QHttpServerResponse(QHttpServerResponder::StatusCode::NotFound);
+    // fromFile 已带 Content-Length / Content-Type，这里只补 Connection，与图纸下载一致
+    QHttpServerResponse resp = QHttpServerResponse::fromFile(abs);
+    QHttpHeaders hdr = resp.headers();
+    hdr.append(QHttpHeaders::WellKnownHeader::Connection, QByteArrayLiteral("close"));
+    resp.setHeaders(hdr);
+    return resp;
+}
+
+// ===== 手机 APK：版本查询与下载（同一局域网内免登录） =====
+QHttpServerResponse LanHttpServer::handleAndroidInfo() const
+{
+    const UpdateInfo info = UpdateManager::readLocalMeta(PackageKind::Android);
+    QJsonObject o;
+    o[QStringLiteral("available")] = info.available;
+    o[QStringLiteral("version")] = info.version;
+    o[QStringLiteral("build_stamp")] = info.buildStamp;
+    o[QStringLiteral("file")] = info.fileName;
+    o[QStringLiteral("size")] = info.size;
+    o[QStringLiteral("uploaded_at")] = info.uploadedAt;
+    return jsonOk(o);
+}
+
+QHttpServerResponse LanHttpServer::handleAndroidPackage() const
+{
+    const QString abs = UpdateManager::localPackagePath(PackageKind::Android);
+    if (abs.isEmpty() || !QFileInfo::exists(abs))
+        return QHttpServerResponse(QHttpServerResponder::StatusCode::NotFound);
     QHttpServerResponse resp = QHttpServerResponse::fromFile(abs);
     QHttpHeaders hdr = resp.headers();
     hdr.append(QHttpHeaders::WellKnownHeader::Connection, QByteArrayLiteral("close"));

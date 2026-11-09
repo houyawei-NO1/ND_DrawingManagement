@@ -6,7 +6,9 @@
 #include <QList>
 #include <QPair>
 #include <QString>
+#include <QStringList>
 #include "model/product.h"
+#include "util/stocktypes.h"
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -53,6 +55,14 @@ public:
     QList<ChangeLog> changeLogsOf(int productId) const;
     QList<QPair<int, QString>> listUsers() const;
     bool verifyUser(const QString &name, const QString &password) const;
+    // 用户操作日志（日志只在服务器落库，客户端只读）
+    QList<OpLog> opLogs(const QDateTime &since) const;
+
+    // ---- ERP 库存档案（只读查询）----
+    QList<StockBatch> stockBatches(QString *err = nullptr) const;
+    QList<QStringList> stockSearch(const QString &batchKey, const QString &keyword,
+                                   int limit, int *total = nullptr,
+                                   QString *err = nullptr) const;
 
     // ---- 写入（对应 DatabaseManager 的同名方法）----
     int saveProduct(Product &p, const QString &changeNote, QString *err,
@@ -76,6 +86,10 @@ public:
     bool addUser(const QString &name, const QString &password, QString *err);
     bool deleteUser(int id, QString *err);
     bool changeUserPassword(int id, const QString &newPassword, QString *err);
+
+    // ---- ERP 库存档案（写入：整份表格 base64 上传到服务器）----
+    bool importStockFile(const QString &srcPath, const QString &originalName, QString *err);
+    bool deleteStockBatch(const QString &key, QString *err);
 
 private:
     explicit RemoteApiClient(QObject *parent = nullptr);

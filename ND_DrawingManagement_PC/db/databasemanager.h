@@ -4,7 +4,9 @@
 #include <QObject>
 #include <QSqlDatabase>
 #include <QList>
+#include <QStringList>
 #include "model/product.h"
+#include "util/stocktypes.h"
 
 // 数据库管理：SQLite 单实例，负责建表与 CRUD
 class DatabaseManager : public QObject
@@ -37,6 +39,18 @@ public:
     // 生成一致性快照到 dstPath；还原会用 srcPath 覆盖当前库（还原前自动再备份一次）
     bool backupDatabase(const QString &dstPath, QString *err = nullptr) const;
     bool restoreDatabase(const QString &srcPath, QString *err = nullptr);
+
+    // ---- ERP 库存档案（数据库文件夹下的 .xls + nd_drawings.db 中的库存表）----
+    // 客户端模式下全部转由 RemoteApiClient 经 HTTP 完成，本机不落盘。
+    QList<StockBatch> stockBatches(QString *err = nullptr) const;
+    // 固定 13 列：行号/存货编号/存货全名/存货型号/存货规格/存货产地/
+    // 缺省供应商/安全库存数量/建档人/建档时间/修改人/修改时间/封装
+    QList<QStringList> stockSearch(const QString &batchKey, const QString &keyword,
+                                   int limit, int *total = nullptr,
+                                   QString *err = nullptr) const;
+    bool importStockFile(const QString &srcPath, const QString &originalName = QString(),
+                         QString *err = nullptr);
+    bool deleteStockBatch(const QString &key, QString *err = nullptr);
 
     static QStringList categories();   // 固定 7 大产品分类
 

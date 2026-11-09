@@ -106,6 +106,8 @@ ManagePage::ManagePage(QWidget *parent) : QWidget(parent)
     m_table->setColumnWidth(4, 150);
     m_table->setColumnWidth(6, 96);
     m_table->verticalHeader()->setVisible(false);
+    // 统一行高，避免填充表格时逐行 setRowHeight 反复触发布局计算
+    m_table->verticalHeader()->setDefaultSectionSize(30);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::ExtendedSelection); // Ctrl/Shift 可多选批量删除
@@ -119,7 +121,8 @@ ManagePage::ManagePage(QWidget *parent) : QWidget(parent)
     // 数量管理：全屏半透明黑框弹窗，常驻页面，点按钮才显示
     m_qtyDialog = new QtyManageDialog(this);
     m_qtyDialog->resize(size());
-    connect(m_qtyDialog, &QtyManageDialog::closed, this, &ManagePage::refresh);
+    // 关闭时不做全量刷新：数量管理只改每日数量与安全值，管理页表格里没有这些列；
+    // 一次刷新是「客户端同步 HTTP 查询 + 重建整张表」，产品多时会明显卡顿。
 
     connect(btnSearch, &QPushButton::clicked, this, &ManagePage::onSearch);
     connect(m_edtKeyword, &QLineEdit::returnPressed, this, &ManagePage::onSearch);
@@ -149,6 +152,14 @@ void ManagePage::onSearch()
                                                                   : m_cmbCategory->currentText();
     const auto list = DatabaseManager::instance().searchProducts(
         category, m_edtKeyword->text(), -1);
+
+    // 型号/物料编码两列是 ResizeToContents，逐格 setItem 会让表头反复遍历全表
+    // 重算列宽（行数多时接近 O(N²)）；批量填充时先固定列宽并暂停绘制，填完再恢复。
+    QHeaderView *hh = m_table->horizontalHeader();
+    hh->setSectionResizeMode(0, QHeaderView::Fixed);
+    hh->setSectionResizeMode(2, QHeaderView::Fixed);
+    m_table->setUpdatesEnabled(false);
+
     m_table->setRowCount(list.size());
     for (int i = 0; i < list.size(); ++i) {
         const Product &p = list.at(i);
@@ -164,8 +175,13 @@ void ManagePage::onSearch()
         m_table->setItem(i, 4, mk(p.createdAt.toString(QStringLiteral("yyyy-MM-dd HH:mm"))));
         m_table->setItem(i, 5, mk(p.remark));
         m_table->setItem(i, 6, mk(p.creator));
-        m_table->setRowHeight(i, 30);
     }
+
+    m_table->setUpdatesEnabled(true);
+    hh->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    hh->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    m_table->resizeColumnToContents(0);
+    m_table->resizeColumnToContents(2);
 }
 
 QList<int> ManagePage::selectedIds() const

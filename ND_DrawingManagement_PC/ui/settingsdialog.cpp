@@ -1,13 +1,18 @@
 #include "settingsdialog.h"
 #include "db/databasemanager.h"
 #include "server/lanhttpserver.h"
+#include "server/remoteapiclient.h"
+#include "server/updatemanager.h"
 #include "model/product.h"
 
 #include <QTimer>
+#include <QRegularExpression>
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QTabWidget>
+#include <QProgressBar>
+#include <QEventLoop>
 #include <QComboBox>
 #include <QTableWidget>
 #include <QPlainTextEdit>
@@ -32,6 +37,17 @@
 #include <QCheckBox>
 #include <QListWidget>
 #include <QButtonGroup>
+#include <QApplication>
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QToolTip>
+#include <QMenu>
+#include <QAction>
+#include <QShortcut>
+#include <QKeySequence>
+#include <QCursor>
+#include <QSignalBlocker>
+#include "roundedmenu.h"
 
 // 自动备份时间统一从 QSettings 读取；旧版本没有该键时沿用 17:00
 static QTime configuredAutoTime()
@@ -68,12 +84,252 @@ SettingsDialog::SettingsDialog(QWidget *parent) : QWidget(parent)
         buildOfflineTab();   // 手机 App 同步（仅服务器主机需要）
         buildWorkPathTab();
         buildBackupTab();
-        buildOpLogTab();     // 近一周用户操作日志
     } else {
         buildConnectionTab();
     }
+    // 日志记录的是所有账号（含客户端）的操作，客户端也应该能看到，按只读方式展示
+    buildOpLogTab();
+    buildVersionTab();       // 服务器和客户端都显示版本管理
 
     root->addWidget(m_tabs);
+}
+
+
+// ==================== 版本管理 ====================
+void SettingsDialog::buildVersionTab()
+{
+    QWidget *page = new QWidget(this);
+    QVBoxLayout *lay = new QVBoxLayout(page);
+    lay->setContentsMargins(16, 14, 16, 14);
+    lay->setSpacing(12);
+
+    QLabel *tip = new QLabel(QStringLiteral(
+        "安装包统一存放在服务器工作路径的「安装包」文件夹，服务器始终只保留最新一份；"
+        "版本号即程序构建日期。上传后，服务器和所有客户端都能通过「工具 → 关于 → 检查更新」"
+        "或标题栏的版本号下载并直接覆盖安装。"), page);
+    tip->setObjectName(QStringLiteral("previewInfo"));
+    tip->setWordWrap(true);
+    lay->addWidget(tip);
+
+    m_lblUpdateInfo = new QLabel(QStringLiteral("正在读取版本信息…"), page);
+    m_lblUpdateInfo->setWordWrap(true);
+    lay->addWidget(m_lblUpdateInfo);
+
+    QHBoxLayout *row = new QHBoxLayout();
+    m_lblUpdateFile = new QLabel(QStringLiteral("未选择安装包"), page);
+    m_lblUpdateFile->setObjectName(QStringLiteral("previewInfo"));
+    row->addWidget(m_lblUpdateFile, 1);
+    QPushButton *btnPick = new QPushButton(QStringLiteral("选择安装包"), page);
+    btnPick->setObjectName(QStringLiteral("btnGhost"));
+    btnPick->setCursor(Qt::PointingHandCursor);
+    connect(btnPick, &QPushButton::clicked, this, &SettingsDialog::onPickUpdatePackage);
+    row->addWidget(btnPick);
+    QPushButton *btnUpload = new QPushButton(QStringLiteral("上传安装包"), page);
+    btnUpload->setObjectName(QStringLiteral("btnEntry"));
+    btnUpload->setCursor(Qt::PointingHandCursor);
+    connect(btnUpload, &QPushButton::clicked, this, &SettingsDialog::onUploadUpdatePackage);
+    row->addWidget(btnUpload);
+    QPushButton *btnRefresh = new QPushButton(QStringLiteral("刷新"), page);
+    btnRefresh->setObjectName(QStringLiteral("btnGhost"));
+    btnRefresh->setCursor(Qt::PointingHandCursor);
+    connect(btnRefresh, &QPushButton::clicked, this, &SettingsDialog::refreshUpdateInfo);
+    row->addWidget(btnRefresh);
+    lay->addLayout(row);
+
+    m_barUpdate = new QProgressBar(page);
+    m_barUpdate->setRange(0, 100);
+    m_barUpdate->setValue(0);
+    lay->addWidget(m_barUpdate);
+
+    m_lblUpdateStatus = new QLabel(QStringLiteral(
+        "选择新版安装包后点「上传安装包」，服务器上的旧安装包会被自动替换。"), page);
+    m_lblUpdateStatus->setObjectName(QStringLiteral("previewInfo"));
+    m_lblUpdateStatus->setWordWrap(true);
+    lay->addWidget(m_lblUpdateStatus);
+
+    // ===== 手机端安装包（APK）：与 PC 安装包同样的选择 / 上传 / 版本显示 =====
+    QLabel *mobileTip = new QLabel(QStringLiteral(
+        "手机端：上传 APK 后，手机与电脑处于同一局域网时，可在手机 APP「关于 → 检查更新」下载安装；"
+        "PC 端「关于」页也可直接下载 APK 文件。"), page);
+    mobileTip->setObjectName(QStringLiteral("previewInfo"));
+    mobileTip->setWordWrap(true);
+    lay->addWidget(mobileTip);
+
+    m_lblMobileInfo = new QLabel(QStringLiteral("服务器手机版本：点「刷新」查询"), page);
+    m_lblMobileInfo->setWordWrap(true);
+    lay->addWidget(m_lblMobileInfo);
+
+    QHBoxLayout *mrow = new QHBoxLayout();
+    m_lblMobileFile = new QLabel(QStringLiteral("未选择 APK"), page);
+    m_lblMobileFile->setObjectName(QStringLiteral("previewInfo"));
+    mrow->addWidget(m_lblMobileFile, 1);
+    QPushButton *btnPickApk = new QPushButton(QStringLiteral("选择手机安装包"), page);
+    btnPickApk->setObjectName(QStringLiteral("btnGhost"));
+    btnPickApk->setCursor(Qt::PointingHandCursor);
+    connect(btnPickApk, &QPushButton::clicked, this, &SettingsDialog::onPickAndroidPackage);
+    mrow->addWidget(btnPickApk);
+    QPushButton *btnUploadApk = new QPushButton(QStringLiteral("上传手机安装包"), page);
+    btnUploadApk->setObjectName(QStringLiteral("btnEntry"));
+    btnUploadApk->setCursor(Qt::PointingHandCursor);
+    connect(btnUploadApk, &QPushButton::clicked, this, &SettingsDialog::onUploadAndroidPackage);
+    mrow->addWidget(btnUploadApk);
+    lay->addLayout(mrow);
+    lay->addStretch(1);
+    m_tabs->addTab(page, QStringLiteral("版本管理"));
+
+    m_lblUpdateInfo->setText(QStringLiteral("本机角色：%1\n本机版本：%2\n服务器版本：点「刷新」查询")
+        .arg(DatabaseManager::isServer() ? QStringLiteral("服务器主机") : QStringLiteral("客户端"),
+             UpdateManager::instance().localVersion()));
+    // 构造时不发同步请求，切到本页才查服务器版本，避免客户端离线时打开设置就卡住
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this](int idx) {
+        if (m_tabs->tabText(idx) == QStringLiteral("版本管理") && !m_updateInfoLoaded)
+            refreshUpdateInfo();
+    });
+}
+
+void SettingsDialog::refreshUpdateInfo()
+{
+    if (!m_lblUpdateInfo)
+        return;
+    QStringList lines;
+    lines.append(QStringLiteral("本机角色：%1")
+                     .arg(DatabaseManager::isServer()
+                              ? QStringLiteral("服务器主机") : QStringLiteral("客户端")));
+    lines.append(QStringLiteral("本机版本：%1").arg(UpdateManager::instance().localVersion()));
+    const bool online = DatabaseManager::isServer() || RemoteApiClient::instance().reachable();
+    if (!online) {
+        lines.append(QStringLiteral("服务器版本：未连接服务器，点「刷新」重试"));
+        m_lblUpdateInfo->setText(lines.join(QLatin1Char('\n')));
+        if (m_lblMobileInfo)
+            m_lblMobileInfo->setText(QStringLiteral("服务器手机版本：未连接服务器，点「刷新」重试"));
+        return;
+    }
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString err;
+    const UpdateInfo info = UpdateManager::instance().checkUpdate(&err);
+    QString merr;
+    const UpdateInfo mobile = UpdateManager::instance().checkUpdate(&merr, PackageKind::Android);
+    QApplication::restoreOverrideCursor();
+    m_updateInfoLoaded = true;
+    if (info.available) {
+        lines.append(QStringLiteral("服务器版本：%1").arg(info.version));
+        lines.append(QStringLiteral("安装包：%1（%2）")
+                         .arg(info.fileName, UpdateManager::readableSize(info.size)));
+        lines.append(QStringLiteral("上传时间：%1").arg(info.uploadedAt));
+        lines.append(QStringLiteral("存放目录：%1")
+                         .arg(DatabaseManager::isServer()
+                                  ? UpdateManager::packageDirectory()
+                                  : QStringLiteral("服务器主机工作路径 / 安装包")));
+    } else {
+        lines.append(QStringLiteral("服务器版本：%1")
+                         .arg(err.isEmpty() ? QStringLiteral("暂无安装包，请先上传") : err));
+    }
+    m_lblUpdateInfo->setText(lines.join(QLatin1Char('\n')));
+    if (m_lblMobileInfo) {
+        if (mobile.available)
+            m_lblMobileInfo->setText(QStringLiteral("服务器手机版本：%1（%2）")
+                                         .arg(mobile.version,
+                                              UpdateManager::readableSize(mobile.size)));
+        else
+            m_lblMobileInfo->setText(QStringLiteral("服务器手机版本：%1")
+                                         .arg(merr.isEmpty()
+                                                  ? QStringLiteral("暂无 APK，请先上传") : merr));
+    }
+}
+
+void SettingsDialog::onPickUpdatePackage()
+{
+    // 打包脚本生成的安装包默认就放在工程的 installer 目录，选择时直接定位过去
+    const QString installerDir = QStringLiteral(
+        "E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/installer");
+    const QString path = QFileDialog::getOpenFileName(
+        this, QStringLiteral("选择新版安装包"),
+        QDir(installerDir).exists() ? installerDir : QString(),
+        QStringLiteral("安装程序 (*.exe);;所有文件 (*)"));
+    if (path.isEmpty())
+        return;
+    m_updateFilePath = path;
+    const QFileInfo fi(path);
+    m_lblUpdateFile->setText(QStringLiteral("已选择：%1（%2）")
+                                 .arg(fi.fileName(),
+                                      UpdateManager::readableSize(fi.size())));
+    m_lblUpdateStatus->setText(QStringLiteral("点击「上传安装包」上传到服务器，旧安装包会被替换。"));
+    m_barUpdate->setValue(0);
+}
+
+void SettingsDialog::onUploadUpdatePackage()
+{
+    if (m_updateFilePath.isEmpty() || !QFileInfo::exists(m_updateFilePath)) {
+        NdMessageBox::warning(this, QStringLiteral("上传安装包"),
+                              QStringLiteral("请先选择新版安装包（.exe）"));
+        return;
+    }
+    m_barUpdate->setValue(0);
+    m_lblUpdateStatus->setText(QStringLiteral("正在上传，请勿关闭程序…"));
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString err;
+    const bool ok = UpdateManager::instance().uploadPackage(m_updateFilePath, &err,
+        [this](int percent) {
+            m_barUpdate->setValue(percent);
+            QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        });
+    QApplication::restoreOverrideCursor();
+    if (!ok) {
+        m_lblUpdateStatus->setText(QStringLiteral("上传失败：%1").arg(err));
+        NdMessageBox::warning(this, QStringLiteral("上传失败"), err);
+        return;
+    }
+    m_lblUpdateStatus->setText(QStringLiteral(
+        "上传完成：服务器安装包已更新，其它电脑点「检查更新」即可下载并覆盖安装。"));
+    refreshUpdateInfo();
+}
+
+void SettingsDialog::onPickAndroidPackage()
+{
+    // Gradle 输出的 APK 默认就在这个目录，选择时直接定位过去
+    const QString apkDir = QStringLiteral(
+        "E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_Android/app/build/outputs/apk/debug");
+    const QString path = QFileDialog::getOpenFileName(
+        this, QStringLiteral("选择手机安装包（APK）"),
+        QDir(apkDir).exists() ? apkDir : QString(),
+        QStringLiteral("Android 安装包 (*.apk);;所有文件 (*)"));
+    if (path.isEmpty())
+        return;
+    m_androidFilePath = path;
+    const QFileInfo fi(path);
+    m_lblMobileFile->setText(QStringLiteral("已选择：%1（%2）")
+                                 .arg(fi.fileName(),
+                                      UpdateManager::readableSize(fi.size())));
+    m_lblUpdateStatus->setText(QStringLiteral(
+        "点击「上传手机安装包」上传到服务器，旧的 APK 会被替换。"));
+    m_barUpdate->setValue(0);
+}
+
+void SettingsDialog::onUploadAndroidPackage()
+{
+    if (m_androidFilePath.isEmpty() || !QFileInfo::exists(m_androidFilePath)) {
+        NdMessageBox::warning(this, QStringLiteral("上传手机安装包"),
+                              QStringLiteral("请先选择新版安装包（.apk）"));
+        return;
+    }
+    m_barUpdate->setValue(0);
+    m_lblUpdateStatus->setText(QStringLiteral("正在上传 APK，请勿关闭程序…"));
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString err;
+    const bool ok = UpdateManager::instance().uploadPackage(m_androidFilePath, &err,
+        [this](int percent) {
+            m_barUpdate->setValue(percent);
+            QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        }, PackageKind::Android);
+    QApplication::restoreOverrideCursor();
+    if (!ok) {
+        m_lblUpdateStatus->setText(QStringLiteral("上传失败：%1").arg(err));
+        NdMessageBox::warning(this, QStringLiteral("上传失败"), err);
+        return;
+    }
+    m_lblUpdateStatus->setText(QStringLiteral(
+        "上传完成：服务器手机安装包已更新，同一局域网的手机可在「关于 → 检查更新」下载安装。"));
+    refreshUpdateInfo();
 }
 
 // ==================== 字段管理 ====================
@@ -184,21 +440,36 @@ void SettingsDialog::onDeleteField()
 // ==================== 用户日志 ====================
 void SettingsDialog::buildOpLogTab()
 {
+    const bool server = DatabaseManager::isServer();
     QWidget *page = new QWidget(this);
     QVBoxLayout *lay = new QVBoxLayout(page);
     lay->setContentsMargins(16, 14, 16, 14);
     lay->setSpacing(10);
 
     QHBoxLayout *top = new QHBoxLayout();
-    QLabel *tip = new QLabel(QStringLiteral(
-        "近一周内所有账号（含客户端）对产品、图纸、库存数量的操作；「查看」可看修改前后明细。"), page);
+    QLabel *tip = new QLabel(server
+        ? QStringLiteral("近一周内（最多显示最近 500 条）所有账号（含客户端）的操作；「查看」可看修改前后明细。")
+        : QStringLiteral("近一周内（最多显示最近 500 条）所有账号的操作记录，日志保存在服务器主机，客户端只读查看；"
+                         "删除与清空请在服务器主机上操作。连不上服务器时列表为空，可点「刷新」重试。"), page);
     tip->setObjectName(QStringLiteral("previewInfo"));
+    tip->setWordWrap(true);
     top->addWidget(tip, 1);
-    QPushButton *btnClear = new QPushButton(QStringLiteral("清空所有操作日志"), page);
-    btnClear->setObjectName(QStringLiteral("btnDanger"));
-    btnClear->setCursor(Qt::PointingHandCursor);
-    connect(btnClear, &QPushButton::clicked, this, &SettingsDialog::onClearOpLogs);
-    top->addWidget(btnClear);
+    QPushButton *btnRefresh = new QPushButton(QStringLiteral("刷新"), page);
+    btnRefresh->setObjectName(QStringLiteral("btnGhost"));
+    btnRefresh->setCursor(Qt::PointingHandCursor);
+    connect(btnRefresh, &QPushButton::clicked, this, [this] {
+        if (!DatabaseManager::isServer())
+            RemoteApiClient::instance().ping(); // 重探服务器，刷新后 reachable 才准确
+        refreshOpLogTable();
+    });
+    top->addWidget(btnRefresh);
+    if (server) {
+        QPushButton *btnClear = new QPushButton(QStringLiteral("清空所有操作日志"), page);
+        btnClear->setObjectName(QStringLiteral("btnDanger"));
+        btnClear->setCursor(Qt::PointingHandCursor);
+        connect(btnClear, &QPushButton::clicked, this, &SettingsDialog::onClearOpLogs);
+        top->addWidget(btnClear);
+    }
     lay->addLayout(top);
 
     m_opLogTable = new QTableWidget(0, 7, page);
@@ -218,17 +489,40 @@ void SettingsDialog::buildOpLogTab()
     m_opLogTable->setColumnWidth(5, 76);
     m_opLogTable->setColumnWidth(6, 76);
     m_opLogTable->verticalHeader()->setVisible(false);
+    m_opLogTable->verticalHeader()->setDefaultSectionSize(34); // 一次设行高，不逐行 setRowHeight
     m_opLogTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    if (!server)
+        m_opLogTable->setColumnHidden(6, true); // 客户端只读，不提供删除
     lay->addWidget(m_opLogTable, 1);
 
     m_tabs->addTab(page, QStringLiteral("用户日志"));
-    refreshOpLogTable();
+    // 下一轮事件循环再加载：先让菜单切换绘制完成，避免点「用户日志」时界面卡住
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this](int idx) {
+        if (m_tabs->tabText(idx) == QStringLiteral("用户日志"))
+            QTimer::singleShot(0, this, [this] { refreshOpLogTable(); });
+    });
 }
 
 void SettingsDialog::refreshOpLogTable()
 {
-    const QList<OpLog> logs = DatabaseManager::instance().opLogs(
-        QDateTime::currentDateTime().addDays(-7));
+    if (!m_opLogTable) return;
+    // 客户端离线时不要发起同步 HTTP 请求，直接显示空表，点「刷新」可重探服务器
+    if (!DatabaseManager::isServer() && !RemoteApiClient::instance().reachable()) {
+        m_opLogTable->setRowCount(0);
+        return;
+    }
+    const QDateTime since = QDateTime::currentDateTime().addDays(-7);
+    QList<OpLog> logs;
+    if (DatabaseManager::isServer()) {
+        logs = DatabaseManager::instance().opLogs(since);
+    } else {
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        logs = DatabaseManager::instance().opLogs(since);
+        QApplication::restoreOverrideCursor();
+    }
+    // 批量填充：暂时关闭重绘与信号，避免逐行 setItem / setCellWidget 反复触发布局重算
+    m_opLogTable->setUpdatesEnabled(false);
+    QSignalBlocker blocker(m_opLogTable);
     m_opLogTable->setRowCount(logs.size());
     for (int i = 0; i < logs.size(); ++i) {
         const OpLog &l = logs.at(i);
@@ -254,14 +548,16 @@ void SettingsDialog::refreshOpLogTable()
         connect(btnView, &QPushButton::clicked, this, &SettingsDialog::onViewOpLog);
         m_opLogTable->setCellWidget(i, 5, btnView);
 
-        QPushButton *btnDel = new QPushButton(QStringLiteral("删除"), m_opLogTable);
-        btnDel->setObjectName(QStringLiteral("btnDanger")); // 红色
-        btnDel->setCursor(Qt::PointingHandCursor);
-        btnDel->setProperty("logId", l.id);
-        connect(btnDel, &QPushButton::clicked, this, &SettingsDialog::onDeleteOpLog);
-        m_opLogTable->setCellWidget(i, 6, btnDel);
-        m_opLogTable->setRowHeight(i, 34);
+        if (DatabaseManager::isServer()) {
+            QPushButton *btnDel = new QPushButton(QStringLiteral("删除"), m_opLogTable);
+            btnDel->setObjectName(QStringLiteral("btnDanger")); // 红色
+            btnDel->setCursor(Qt::PointingHandCursor);
+            btnDel->setProperty("logId", l.id);
+            connect(btnDel, &QPushButton::clicked, this, &SettingsDialog::onDeleteOpLog);
+            m_opLogTable->setCellWidget(i, 6, btnDel);
+        }
     }
+    m_opLogTable->setUpdatesEnabled(true);
 }
 
 void SettingsDialog::onViewOpLog()
@@ -301,6 +597,7 @@ void SettingsDialog::onViewOpLog()
 
 void SettingsDialog::onDeleteOpLog()
 {
+    if (!DatabaseManager::isServer()) return; // 客户端只读
     QPushButton *btn = qobject_cast<QPushButton *>(sender());
     if (!btn) return;
     if (!NdMessageBox::question(this, QStringLiteral("确认"),
@@ -312,6 +609,7 @@ void SettingsDialog::onDeleteOpLog()
 
 void SettingsDialog::onClearOpLogs()
 {
+    if (!DatabaseManager::isServer()) return; // 客户端只读
     if (!NdMessageBox::question(this, QStringLiteral("确认"),
                                 QStringLiteral("清空全部操作日志？此操作不可恢复，产品数据不受影响。")))
         return;

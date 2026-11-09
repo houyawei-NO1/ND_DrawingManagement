@@ -1,7 +1,7 @@
 #ifndef MATERIALCODEDIALOG_H
 #define MATERIALCODEDIALOG_H
 
-#include <QWidget>
+#include "overlaymask.h"
 #include <QList>
 #include <QStringList>
 
@@ -22,7 +22,7 @@ class QDateEdit;
 // - 编码为空：直接补充；
 // - 已有编码且不同：默认不改动，勾选「覆盖已有编码」后才更新；
 // - 识别编码位数与库中编码不符：判定「编码识别错误」，一律不写入数据库。
-class MaterialCodeDialog : public QWidget
+class MaterialCodeDialog : public OverlayMask
 {
     Q_OBJECT
 public:

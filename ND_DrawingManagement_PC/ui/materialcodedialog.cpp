@@ -361,14 +361,14 @@ static QString dropAreaStyle(bool highlight)
 }
 
 MaterialCodeDialog::MaterialCodeDialog(QWidget *parent, Mode mode, bool embedded)
-    : QWidget(parent), m_mode(mode), m_embedded(embedded)
+    : OverlayMask(parent), m_mode(mode), m_embedded(embedded)
 {
-    // 自定义 QWidget 子类必须显式开启该属性，否则样式表背景不会绘制
+    // 内联嵌入时仍按普通 QWidget 绘制样式表背景
     setAttribute(Qt::WA_StyledBackground, true);
     setAcceptDrops(true);
     if (!m_embedded) {
-        // 覆盖式面板：复用「关于窗口」的半透明遮罩样式，点遮罩空白处关闭
-        setObjectName(QStringLiteral("aboutOverlay"));
+        // 全屏半透明黑遮罩由 OverlayMask 统一提供，点遮罩空白处关闭
+        enableOverlay();
         hide();
         installEventFilter(this);
     }
@@ -577,13 +577,9 @@ void MaterialCodeDialog::showPanel()
 {
     if (m_embedded)
         return; // 内联嵌入模式由父布局管理，不覆盖父窗口
-    if (parentWidget()) {
-        resize(parentWidget()->size());
-        // 窗口较小时把卡片收进可视范围，避免右侧原始数据被裁掉
-        m_card->setFixedSize(qMin(1120, width() - 40), qMin(700, height() - 40));
-    }
-    raise();
-    show();
+    showOverlay(); // 全屏半透明黑遮罩
+    // 屏幕较小时把卡片收进可视范围，避免右侧原始数据被裁掉
+    m_card->setFixedSize(qMin(1120, width() - 40), qMin(700, height() - 40));
     if (m_pasteShortcut)
         m_pasteShortcut->setEnabled(true);
 }

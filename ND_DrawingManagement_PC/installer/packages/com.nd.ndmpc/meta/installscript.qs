@@ -22,6 +22,25 @@ function stopRunningProgram()
 
 function Component()
 {
+    // IFW 的「安装文件夹」页会拒绝「目录已包含安装」（TargetDirectoryInUse，
+    // 只有一个 No 按钮，无法自动应答），该页一显示就没法覆盖安装。
+    // 所以按目标目录是否已有安装动态决定页面可见性：
+    //   · 已有安装 → 隐藏该页，跳过校验，直接覆盖旧版本（无需卸载）；
+    //   · 首次安装 → 显示该页，默认值来自 config.xml 的 TargetDir（D 盘），用户可改。
+    // 取不到 TargetDir 或 API 异常时一律隐藏，优先保证覆盖安装可用。
+    var showTargetPage = false;
+    try {
+        var target = installer.value("TargetDir");
+        if (target)
+            showTargetPage = !installer.fileExists(target + "/components.xml");
+    } catch (e) {
+        showTargetPage = false;
+    }
+    try {
+        installer.setDefaultPageVisible(QInstaller.TargetDirectory, showTargetPage);
+    } catch (e) {
+    }
+
     // 卸载开始时（删除文件之前）、安装/更新开始时都先关掉程序
     installer.uninstallationStarted.connect(this, Component.prototype.onUninstallationStarted);
     installer.installationStarted.connect(this, Component.prototype.onInstallationStarted);

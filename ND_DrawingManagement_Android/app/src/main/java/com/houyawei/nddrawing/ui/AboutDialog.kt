@@ -13,9 +13,15 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -25,6 +31,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.houyawei.nddrawing.BuildConfig
 import com.houyawei.nddrawing.R
+import com.houyawei.nddrawing.util.AppUpdate
+import kotlinx.coroutines.launch
+import java.io.File
 
 // APP 端技术栈：与 app/build.gradle.kts、AndroidManifest.xml 保持一致
 private val APP_TECH = listOf(
@@ -39,11 +48,54 @@ private val APP_TECH = listOf(
 
 /**
  * 关于弹窗：透明黑底遮罩 + 居中深色卡片。
- * 版本号改为构建日期（Gradle 编译时自动生成），「环境」改为「技术」并列出主要组件与版本。
+ * 版本号为构建日期（Gradle 编译时自动生成），「关于」页新增「检查更新」：
+ * 手机与电脑处于同一局域网时，从电脑端服务器下载新版本 APK 并安装。
  * 点击遮罩空白处关闭；点卡片内部不关闭。
  */
 @Composable
 fun AboutDialog(onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var status by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var percent by remember { mutableStateOf(-1) }
+    var apkFile by remember { mutableStateOf<File?>(null) }
+
+    fun startCheck() {
+        if (busy) return
+        busy = true
+        status = "正在检查更新…"
+        percent = -1
+        apkFile = null
+        scope.launch {
+            when (val r = AppUpdate.check(ctx)) {
+                is AppUpdate.CheckResult.NoServer ->
+                    status = "未配置服务器地址。请先在「设置 → 数据同步」填写电脑端 IP，并连接同一局域网。"
+                is AppUpdate.CheckResult.NoPackage ->
+                    status = "服务器上还没有手机安装包，请先在电脑端「设置 → 版本管理」上传 APK。"
+                is AppUpdate.CheckResult.Error ->
+                    status = "检查失败：${r.message}\n请确认手机与电脑处于同一局域网。"
+                is AppUpdate.CheckResult.Ready -> {
+                    if (!AppUpdate.hasNewer(r.info.version)) {
+                        status = "当前已是最新版本（${BuildConfig.BUILD_DATE}）。"
+                    } else {
+                        status = "发现新版本 ${r.info.version}，正在下载…"
+                        percent = 0
+                        try {
+                            val f = AppUpdate.download(ctx, r.info) { p -> percent = p }
+                            apkFile = f
+                            percent = 100
+                            status = "下载完成（${r.info.version}），点「立即安装」按系统提示完成安装。"
+                        } catch (e: Exception) {
+                            status = "下载失败：${e.message}"
+                        }
+                    }
+                }
+            }
+            busy = false
+        }
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -111,10 +163,59 @@ fun AboutDialog(onDismiss: () -> Unit) {
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(Modifier.height(16.dp))
-                    Button(
-                        onClick = onDismiss,
-                        modifier = Modifier.width(120.dp)
-                    ) { Text("确 定", fontSize = 14.sp) }
+                    HorizontalDivider(color = Color(0xFF4A5468))
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "版本更新",
+                        color = Color(0xFF43CF7C),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "仅在与电脑处于同一局域网时可用：检查服务器上的新版 APK，下载后直接安装。",
+                        color = Color(0xFFC8D2DC),
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (status.isNotEmpty()) {
+                        Text(
+                            status,
+                            color = Color(0xFFE6EDF5),
+                            fontSize = 12.sp,
+                            lineHeight = 18.sp,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    if (percent in 0..99) {
+                        Text(
+                            "下载进度：$percent%",
+                            color = Color(0xFF43CF7C),
+                            fontSize = 13.sp
+                        )
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    apkFile?.let { f ->
+                        Button(
+                            onClick = { AppUpdate.install(ctx, f) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("立即安装", fontSize = 14.sp) }
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = { startCheck() },
+                            enabled = !busy,
+                            modifier = Modifier.weight(1f)
+                        ) { Text("检查更新", fontSize = 14.sp) }
+                        Button(
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f)
+                        ) { Text("确 定", fontSize = 14.sp) }
+                    }
                 }
             }
         }

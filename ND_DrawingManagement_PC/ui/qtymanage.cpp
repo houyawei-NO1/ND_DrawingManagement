@@ -13,11 +13,10 @@
 #include <QInputDialog>
 #include <QEvent>
 
-QtyManageDialog::QtyManageDialog(QWidget *parent) : QWidget(parent)
+QtyManageDialog::QtyManageDialog(QWidget *parent) : OverlayMask(parent)
 {
-    // 复用「关于窗口」黑色半透明遮罩样式，点遮罩空白处关闭
-    setObjectName(QStringLiteral("aboutOverlay"));
-    setAttribute(Qt::WA_StyledBackground, true);
+    // 全屏半透明黑遮罩由 OverlayMask 统一提供，点遮罩空白处关闭
+    enableOverlay();
     hide();
     installEventFilter(this);
 
@@ -176,10 +175,7 @@ void QtyManageDialog::closePanel()
 
 void QtyManageDialog::showPanel()
 {
-    if (parentWidget())
-        resize(parentWidget()->size());
-    raise();
-    show();
+    showOverlay(); // 全屏半透明黑遮罩
 }
 
 bool QtyManageDialog::eventFilter(QObject *watched, QEvent *event)

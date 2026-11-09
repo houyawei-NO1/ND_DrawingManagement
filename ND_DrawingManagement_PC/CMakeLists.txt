@@ -38,28 +38,38 @@ set(PROJECT_SOURCES
     ui/entrydialog.cpp
     ui/managepage.cpp
     ui/settingsdialog.cpp
+    ui/toolspage.cpp
+    ui/updatedialog.cpp
     ui/materialcodedialog.cpp
     ui/qtymanage.cpp
     ui/ndmessagebox.cpp
     ui/roledialog.cpp
     server/lanhttpserver.cpp
     server/remoteapiclient.cpp
+    server/updatemanager.cpp
+    util/xlsreader.cpp
 )
 
 # Header files
 set(PROJECT_HEADERS
     model/product.h
+    util/stocktypes.h
+    util/xlsreader.h
     db/databasemanager.h
     image/heifconverter.h
     ui/mainwindow.h
     ui/entrydialog.h
     ui/settingsdialog.h
+    ui/toolspage.h
+    ui/updatedialog.h
     ui/materialcodedialog.h
     ui/qtymanage.h
     ui/ndmessagebox.h
     ui/roledialog.h
+    ui/overlaymask.h
     server/lanhttpserver.h
     server/remoteapiclient.h
+    server/updatemanager.h
 )
 
 # Resource files
