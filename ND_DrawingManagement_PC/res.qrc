@@ -4,4 +4,7 @@
         <file>logo.ico</file>
         <file>arrow_down.svg</file>
     </qresource>
+    <qresource prefix="/">
+        <file>data/chip_seed.json</file>
+    </qresource>
 </RCC>

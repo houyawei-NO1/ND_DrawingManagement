@@ -39,11 +39,15 @@ set(PROJECT_SOURCES
     ui/managepage.cpp
     ui/settingsdialog.cpp
     ui/toolspage.cpp
+    ui/chipquerypage.cpp
     ui/updatedialog.cpp
     ui/materialcodedialog.cpp
+    ui/ocrimagedrop.cpp
+    ui/ocrresultpopup.cpp
     ui/qtymanage.cpp
     ui/ndmessagebox.cpp
     ui/roledialog.cpp
+    ui/changelogdialog.cpp
     server/lanhttpserver.cpp
     server/remoteapiclient.cpp
     server/updatemanager.cpp
@@ -54,6 +58,7 @@ set(PROJECT_SOURCES
 set(PROJECT_HEADERS
     model/product.h
     util/stocktypes.h
+    util/chiptypes.h
     util/xlsreader.h
     db/databasemanager.h
     image/heifconverter.h
@@ -61,12 +66,18 @@ set(PROJECT_HEADERS
     ui/entrydialog.h
     ui/settingsdialog.h
     ui/toolspage.h
+    ui/chipquerypage.h
     ui/updatedialog.h
     ui/materialcodedialog.h
+    ui/ocrhelper.h
+    ui/ocrimagedrop.h
+    ui/ocrresultpopup.h
     ui/qtymanage.h
     ui/ndmessagebox.h
     ui/roledialog.h
+    ui/changelogdialog.h
     ui/overlaymask.h
+    ui/savingoverlay.h
     server/lanhttpserver.h
     server/remoteapiclient.h
     server/updatemanager.h

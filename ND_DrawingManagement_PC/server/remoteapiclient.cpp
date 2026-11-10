@@ -637,6 +637,24 @@ bool RemoteApiClient::updateDrawingMeta(int drawingId, int dtype,
     return !writeAction(QStringLiteral("update_drawing_meta"), args, err).isEmpty();
 }
 
+bool RemoteApiClient::deleteDrawing(int drawingId, QString *err)
+{
+    QJsonObject args;
+    args[QStringLiteral("id")] = drawingId;
+    const bool ok = !writeAction(QStringLiteral("delete_drawing"), args, err).isEmpty();
+    if (ok) {
+        // 服务器上的归档文件已删除，顺手清掉本机这张图纸的预览缓存副本
+        QDir dir(cacheDirPath());
+        if (dir.exists()) {
+            const QStringList hits = dir.entryList(
+                QStringList{QStringLiteral("d%1_*").arg(drawingId)}, QDir::Files);
+            for (const QString &f : hits)
+                QFile::remove(dir.filePath(f));
+        }
+    }
+    return ok;
+}
+
 bool RemoteApiClient::updateChangeLog(int id, const QString &content, QString *err)
 {
     QJsonObject args;
@@ -755,4 +773,66 @@ bool RemoteApiClient::deleteStockBatch(const QString &key, QString *err)
     QJsonObject args;
     args[QStringLiteral("key")] = key;
     return !writeAction(QStringLiteral("delete_stock_archive"), args, err).isEmpty();
+}
+
+// ==================== 芯片查询 ====================
+QStringList RemoteApiClient::chipHardwares(QString *err) const
+{
+    QJsonObject args;
+    args[QStringLiteral("what")] = QStringLiteral("hardwares");
+    const QJsonObject res = readAction(QStringLiteral("chip_query"), args, err);
+    QStringList out;
+    for (const QJsonValue &v : res.value(QStringLiteral("hardwares")).toArray())
+        out << v.toString();
+    return out;
+}
+
+QList<ChipItem> RemoteApiClient::chipModelDict(QString *err) const
+{
+    QJsonObject args;
+    args[QStringLiteral("what")] = QStringLiteral("models");
+    const QJsonObject res = readAction(QStringLiteral("chip_query"), args, err);
+    QList<ChipItem> out;
+    for (const QJsonValue &v : res.value(QStringLiteral("items")).toArray())
+        out.append(ChipItem::fromJson(v.toObject()));
+    return out;
+}
+
+QList<ChipItem> RemoteApiClient::chipSearch(const QString &mode, const QString &keyword,
+                                            int limit, int *total, QString *err) const
+{
+    if (total) *total = 0;
+    QJsonObject args;
+    args[QStringLiteral("what")] = QStringLiteral("search");
+    args[QStringLiteral("mode")] = mode;
+    args[QStringLiteral("keyword")] = keyword;
+    args[QStringLiteral("limit")] = limit;
+    const QJsonObject res = readAction(QStringLiteral("chip_query"), args, err);
+    if (total) *total = res.value(QStringLiteral("total")).toInt();
+    QList<ChipItem> out;
+    for (const QJsonValue &v : res.value(QStringLiteral("items")).toArray())
+        out.append(ChipItem::fromJson(v.toObject()));
+    return out;
+}
+
+bool RemoteApiClient::chipSave(ChipItem *item, QString *err)
+{
+    if (!item)
+        return false;
+    QJsonObject args = item->toJson();
+    args[QStringLiteral("op")] = QStringLiteral("save");
+    const QJsonObject res = writeAction(QStringLiteral("chip_write"), args, err);
+    if (res.isEmpty())
+        return false;
+    if (item->id <= 0)
+        item->id = res.value(QStringLiteral("id")).toInt();
+    return true;
+}
+
+bool RemoteApiClient::chipDelete(int id, QString *err)
+{
+    QJsonObject args;
+    args[QStringLiteral("op")] = QStringLiteral("delete");
+    args[QStringLiteral("id")] = id;
+    return !writeAction(QStringLiteral("chip_write"), args, err).isEmpty();
 }

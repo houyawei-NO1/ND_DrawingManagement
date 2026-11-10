@@ -14,6 +14,7 @@
 #include "ndmessagebox.h"
 #include "materialcodedialog.h"
 #include "qtymanage.h"
+#include "changelogdialog.h"
 #include <QInputDialog>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -121,6 +122,9 @@ ManagePage::ManagePage(QWidget *parent) : QWidget(parent)
     // 数量管理：全屏半透明黑框弹窗，常驻页面，点按钮才显示
     m_qtyDialog = new QtyManageDialog(this);
     m_qtyDialog->resize(size());
+
+    // 更改记录：与数量管理同款的全屏半透明黑遮罩卡片
+    m_logDialog = new ChangeLogDialog(this);
     // 关闭时不做全量刷新：数量管理只改每日数量与安全值，管理页表格里没有这些列；
     // 一次刷新是「客户端同步 HTTP 查询 + 重建整张表」，产品多时会明显卡顿。
 
@@ -235,88 +239,17 @@ void ManagePage::onDelete()
     refresh();
 }
 
-// 更改记录弹窗：查看 / 修改 / 删除
+// 更改记录：全屏半透明黑遮罩卡片（与数量管理、关于窗口同款），常驻页面复用
 void ManagePage::onChangeLogs()
 {
     const QList<int> ids = selectedIds();
     if (ids.size() != 1) {
-        NdMessageBox::information(this, QStringLiteral("提示"), QStringLiteral("请点选 1 条记录查看更改记录"));
+        NdMessageBox::information(this, QStringLiteral("提示"),
+                                  QStringLiteral("请点选 1 条记录查看更改记录"));
         return;
     }
-    const int pid = ids.first();
-
-    QDialog dlg(this);
-    dlg.setWindowTitle(QStringLiteral("更改记录"));
-    dlg.resize(640, 400);
-    QVBoxLayout *lay = new QVBoxLayout(&dlg);
-
-    QTableWidget *table = new QTableWidget(0, 4, &dlg);
-    table->setHorizontalHeaderLabels({QStringLiteral("时间"), QStringLiteral("操作人"),
-                                      QStringLiteral("内容"), QStringLiteral("操作")});
-    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
-    table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Fixed);
-    table->setColumnWidth(3, 140);
-    table->verticalHeader()->setVisible(false);
-    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    lay->addWidget(table, 1);
-
-    std::function<void()> reload;
-    reload = [&] {
-        const auto logs = DatabaseManager::instance().changeLogsOf(pid);
-        table->setRowCount(logs.size());
-        for (int i = 0; i < logs.size(); ++i) {
-            const ChangeLog log = logs.at(i); // 按值拷贝，避免 lambda 引用悬空
-            table->setItem(i, 0, new QTableWidgetItem(log.createdAt.toString(QStringLiteral("yyyy-MM-dd HH:mm"))));
-            table->setItem(i, 1, new QTableWidgetItem(log.oper));
-            table->setItem(i, 2, new QTableWidgetItem(log.content));
-
-            QWidget *ops = new QWidget(table);
-            QHBoxLayout *ol = new QHBoxLayout(ops);
-            ol->setContentsMargins(2, 0, 2, 0);
-            ol->setSpacing(4);
-            QPushButton *btnE = new QPushButton(QStringLiteral("修改"), ops);
-            btnE->setObjectName(QStringLiteral("btnSearch"));
-            btnE->setCursor(Qt::PointingHandCursor);
-            QPushButton *btnD = new QPushButton(QStringLiteral("删除"), ops);
-            btnD->setObjectName(QStringLiteral("btnDanger"));
-            btnD->setCursor(Qt::PointingHandCursor);
-            ol->addWidget(btnE);
-            ol->addWidget(btnD);
-            table->setCellWidget(i, 3, ops);
-            table->setRowHeight(i, 30);
-
-            connect(btnE, &QPushButton::clicked, &dlg, [&dlg, log, reload] {
-                bool ok = false;
-                const QString text = QInputDialog::getMultiLineText(
-                    &dlg, QStringLiteral("修改更改记录"), QStringLiteral("内容："), log.content, &ok);
-                if (!ok) return;
-                QString err;
-                if (!DatabaseManager::instance().updateChangeLog(log.id, text, &err))
-                    NdMessageBox::warning(&dlg, QStringLiteral("失败"), err);
-                reload();
-            });
-            connect(btnD, &QPushButton::clicked, &dlg, [&dlg, log, reload] {
-                if (!NdMessageBox::question(&dlg, QStringLiteral("确认"),
-                                            QStringLiteral("删除这条更改记录？")))
-                    return;
-                DatabaseManager::instance().deleteChangeLog(log.id);
-                reload();
-            });
-        }
-    };
-    reload();
-
-    QPushButton *btnClose = new QPushButton(QStringLiteral("关 闭"), &dlg);
-    btnClose->setObjectName(QStringLiteral("btnEntry"));
-    btnClose->setCursor(Qt::PointingHandCursor);
-    connect(btnClose, &QPushButton::clicked, &dlg, &QDialog::accept);
-    QHBoxLayout *bl = new QHBoxLayout();
-    bl->addStretch();
-    bl->addWidget(btnClose);
-    lay->addLayout(bl);
-
-    dlg.exec();
+    m_logDialog->loadProduct(ids.first());
+    m_logDialog->showPanel();
 }
 
 // 批量导入：选一个文件夹（如 F:\侯亚威电脑共享\5.控制器），

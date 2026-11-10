@@ -1,0 +1,3 @@
+set(__QT_DEPLOY_TARGET_ND_DrawingManagement_PC_FILE E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/_build_check/bin/ND_DrawingManagement_PC.exe)
+set(__QT_DEPLOY_TARGET_ND_DrawingManagement_PC_TYPE EXECUTABLE)
+set(__QT_DEPLOY_TARGET_ND_DrawingManagement_PC_RUNTIME_DLLS D:/Qt/6.8.3/mingw_64/bin/Qt6Sql.dll;D:/Qt/6.8.3/mingw_64/bin/Qt6HttpServer.dll;D:/Qt/6.8.3/mingw_64/bin/Qt6PdfWidgets.dll;D:/Qt/6.8.3/mingw_64/bin/Qt6Svg.dll;D:/Qt/6.8.3/mingw_64/bin/Qt6WebSockets.dll;D:/Qt/6.8.3/mingw_64/bin/Qt6Widgets.dll;D:/Qt/6.8.3/mingw_64/bin/Qt6Pdf.dll;D:/Qt/6.8.3/mingw_64/bin/Qt6Network.dll;D:/Qt/6.8.3/mingw_64/bin/Qt6Gui.dll;D:/Qt/6.8.3/mingw_64/bin/Qt6Core.dll)

@@ -195,6 +195,7 @@ bool DatabaseManager::init()
     dedupeQtyLogsByDay(); // 同一产品同一天只保留一条数量记录（历史重复清理 + 唯一约束）
     pruneMissingDrawings(); // 清理文件已丢失的孤儿记录（放在重命名之后，先尽量修复路径）
     seedDefaults();
+    seedChipData(); // 首次启动把 Excel 数据（已转成 JSON 资源）灌入 chip_item
     migrateHwSwToExt();
     return true;
 }
@@ -343,6 +344,7 @@ bool DatabaseManager::restoreDatabase(const QString &srcPath, QString *err)
     }
     QFile::remove(tmp);
     createTables(); // 幂等，补齐可能缺失的表
+    seedChipData(); // 旧备份里没有芯片台账时补入初始数据（有数据则不动）
     // 还原进来的库可能记着另一个工作路径，同样重定位后再写回当前根
     QSqlQuery rq(m_db);
     QString restoredRoot;
@@ -436,6 +438,23 @@ void DatabaseManager::createTables()
         " package TEXT, search TEXT)"));
     q.exec(QStringLiteral(
         "CREATE INDEX IF NOT EXISTS idx_stock_batch ON stock_archive(batch)"));
+    // 重要芯片台账：工具 → 芯片查询专用，与 product 表完全解耦（没有图纸、不参与产品搜索）
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS chip_item("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " hardware TEXT NOT NULL,"          // 硬件版本 ← 物资小类
+        " category TEXT,"                   // 类型     ← 零部件中使用进口芯片名称
+        " model TEXT NOT NULL,"             // 型号     ← 芯片型号
+        " qty INTEGER NOT NULL DEFAULT 0,"  // 数量     ← 使用数量
+        " function TEXT,"                   // 功能
+        " country TEXT,"                    // 国家
+        " brand TEXT,"                      // 品牌
+        " remark TEXT,"                     // 备注（预留为空）
+        " creator TEXT, created_at TEXT, updated_at TEXT)"));
+    q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_chip_hardware ON chip_item(hardware)"));
+    q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_chip_model ON chip_item(model)"));
     ensureProductColumns();
 }
 
@@ -707,6 +726,11 @@ QString DatabaseManager::currentOperator() const
     return m_currentOperator.isEmpty() ? QStringLiteral("本机") : m_currentOperator;
 }
 
+QString DatabaseManager::currentOperatorRaw() const
+{
+    return m_currentOperator;
+}
+
 bool DatabaseManager::addOpLog(const QString &action, const QString &model,
                                const QString &name, const QString &detail)
 {
@@ -924,6 +948,276 @@ void DatabaseManager::seedDefaults()
         q.addBindValue(QStringLiteral("admin"));
         q.exec();
     }
+}
+
+// ==================== 芯片查询（重要芯片台账） ====================
+namespace {
+ChipItem chipFromQuery(const QSqlQuery &q)
+{
+    ChipItem c;
+    c.id       = q.value(0).toInt();
+    c.hardware = q.value(1).toString();
+    c.category = q.value(2).toString();
+    c.model    = q.value(3).toString();
+    c.qty      = q.value(4).toInt();
+    c.function = q.value(5).toString();
+    c.country  = q.value(6).toString();
+    c.brand    = q.value(7).toString();
+    c.remark   = q.value(8).toString();
+    return c;
+}
+} // namespace
+
+// 初始 Excel 把恩智浦（NXP）的产地误填成「德国」，实际它是荷兰公司。
+// 已经灌进库的旧数据不会被 seedChipData() 重灌，所以这里单独做一次性订正；
+// 用 app_meta 打标记，只跑一次，避免日后反复覆盖管理员手工修改的国家。
+void DatabaseManager::fixChipBrandCountry()
+{
+    if (!m_db.isOpen())
+        return;
+    QSqlQuery q(m_db);
+    if (q.exec(QStringLiteral("SELECT value FROM app_meta WHERE key='chip_nxp_country_fixed'"))
+        && q.next() && q.value(0).toString() == QLatin1String("1"))
+        return;
+    const QString brand = QStringLiteral("恩智浦（NXP）");
+    const QString country = QStringLiteral("荷兰");
+    QSqlQuery up(m_db);
+    up.prepare(QStringLiteral(
+        "UPDATE chip_item SET country=?, updated_at=? "
+        "WHERE brand=? AND (country IS NULL OR country<>?)"));
+    up.addBindValue(country);
+    up.addBindValue(QDateTime::currentDateTime().toString(Qt::ISODate));
+    up.addBindValue(brand);
+    up.addBindValue(country);
+    if (!up.exec()) {
+        qWarning() << "fix chip brand country failed:" << up.lastError().text();
+        return;
+    }
+    q.exec(QStringLiteral(
+        "INSERT OR REPLACE INTO app_meta(key,value) VALUES('chip_nxp_country_fixed','1')"));
+}
+
+// 表格只作初始数据来源：首次启动把 :/data/chip_seed.json 灌进来，
+// 之后系统内的增删改就是唯一数据源，任何时候都不覆盖用户数据。
+void DatabaseManager::seedChipData()
+{
+    if (!m_db.isOpen())
+        return;
+    fixChipBrandCountry(); // 旧库产地填错的先订正，再判断是否需要灌初始数据
+    QSqlQuery q(m_db);
+    if (q.exec(QStringLiteral("SELECT value FROM app_meta WHERE key='chip_seeded'"))
+        && q.next() && q.value(0).toString() == QLatin1String("1"))
+        return;
+    if (q.exec(QStringLiteral("SELECT COUNT(*) FROM chip_item"))
+        && q.next() && q.value(0).toInt() > 0) {
+        q.exec(QStringLiteral(
+            "INSERT OR REPLACE INTO app_meta(key,value) VALUES('chip_seeded','1')"));
+        return;
+    }
+    QFile f(QStringLiteral(":/data/chip_seed.json"));
+    if (!f.open(QIODevice::ReadOnly)) {
+        qWarning() << "chip seed resource missing";
+        return;
+    }
+    QJsonParseError pe;
+    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &pe);
+    if (pe.error != QJsonParseError::NoError || !doc.isArray()) {
+        qWarning() << "chip seed json invalid:" << pe.errorString();
+        return;
+    }
+    const QString now = QDateTime::currentDateTime().toString(Qt::ISODate);
+    m_db.transaction();
+    QSqlQuery ins(m_db);
+    ins.prepare(QStringLiteral(
+        "INSERT INTO chip_item(hardware,category,model,qty,function,country,brand,remark,"
+        "creator,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)"));
+    for (const QJsonValue &v : doc.array()) {
+        const QJsonObject o = v.toObject();
+        ins.addBindValue(o.value(QStringLiteral("hardware")).toString());
+        ins.addBindValue(o.value(QStringLiteral("type")).toString());
+        ins.addBindValue(o.value(QStringLiteral("model")).toString());
+        ins.addBindValue(o.value(QStringLiteral("qty")).toInt());
+        ins.addBindValue(o.value(QStringLiteral("function")).toString());
+        ins.addBindValue(o.value(QStringLiteral("country")).toString());
+        ins.addBindValue(o.value(QStringLiteral("brand")).toString());
+        ins.addBindValue(QString());                 // 备注预留为空
+        ins.addBindValue(QStringLiteral("system"));  // 初始导入
+        ins.addBindValue(now);
+        ins.addBindValue(now);
+        ins.exec();
+    }
+    m_db.commit();
+    q.exec(QStringLiteral(
+        "INSERT OR REPLACE INTO app_meta(key,value) VALUES('chip_seeded','1')"));
+}
+
+QStringList DatabaseManager::chipHardwares(QString *err) const
+{
+    if (err) err->clear();
+    if (!isServer())
+        return RemoteApiClient::instance().chipHardwares(err);
+    QStringList out;
+    QSqlQuery q(m_db);
+    if (!q.exec(QStringLiteral(
+            "SELECT DISTINCT hardware FROM chip_item WHERE hardware<>'' ORDER BY hardware"))) {
+        if (err) *err = q.lastError().text();
+        return out;
+    }
+    while (q.next())
+        out << q.value(0).toString();
+    return out;
+}
+
+QList<ChipItem> DatabaseManager::chipModelDict(QString *err) const
+{
+    if (err) err->clear();
+    if (!isServer())
+        return RemoteApiClient::instance().chipModelDict(err);
+    QList<ChipItem> out;
+    QStringList seen;
+    QSqlQuery q(m_db);
+    if (!q.exec(QStringLiteral(
+            "SELECT id,hardware,category,model,qty,function,country,brand,remark "
+            "FROM chip_item ORDER BY model, id"))) {
+        if (err) *err = q.lastError().text();
+        return out;
+    }
+    while (q.next()) {
+        const QString key = q.value(3).toString().trimmed().toUpper();
+        if (seen.contains(key))
+            continue;
+        seen.append(key);
+        out.append(chipFromQuery(q));
+    }
+    return out;
+}
+
+QList<ChipItem> DatabaseManager::chipSearch(const QString &mode, const QString &keyword,
+                                            int limit, int *total, QString *err) const
+{
+    if (total) *total = 0;
+    if (err) err->clear();
+    if (!isServer())
+        return RemoteApiClient::instance().chipSearch(mode, keyword, limit, total, err);
+
+    QList<ChipItem> out;
+    const QString kw = keyword.trimmed();
+    const bool byHardware = (mode != QLatin1String("model"));
+    const QString col = byHardware ? QStringLiteral("hardware") : QStringLiteral("model");
+    const QString where = kw.isEmpty()
+        ? QString()
+        : QStringLiteral(" WHERE instr(upper(%1), upper(?)) > 0").arg(col);
+
+    QSqlQuery cnt(m_db);
+    cnt.prepare(QStringLiteral("SELECT COUNT(*) FROM chip_item") + where);
+    if (!kw.isEmpty())
+        cnt.addBindValue(kw);
+    if (cnt.exec() && cnt.next() && total)
+        *total = cnt.value(0).toInt();
+
+    QString sql = QStringLiteral(
+        "SELECT id,hardware,category,model,qty,function,country,brand,remark "
+        "FROM chip_item") + where
+        + QStringLiteral(" ORDER BY %1, category, model, id").arg(col);
+    if (limit > 0)
+        sql += QStringLiteral(" LIMIT %1").arg(limit);
+    QSqlQuery q(m_db);
+    q.prepare(sql);
+    if (!kw.isEmpty())
+        q.addBindValue(kw);
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        return out;
+    }
+    while (q.next())
+        out.append(chipFromQuery(q));
+    return out;
+}
+
+bool DatabaseManager::chipSave(ChipItem *item, QString *err)
+{
+    if (err) err->clear();
+    if (!item)
+        return false;
+    if (!isServer())
+        return RemoteApiClient::instance().chipSave(item, err);
+    if (item->hardware.trimmed().isEmpty() || item->model.trimmed().isEmpty()) {
+        if (err) *err = QStringLiteral("硬件版本和型号不能为空");
+        return false;
+    }
+    const bool isNew = (item->id <= 0);
+    const QString now = QDateTime::currentDateTime().toString(Qt::ISODate);
+    QSqlQuery q(m_db);
+    bool ok = false;
+    if (!isNew) {
+        q.prepare(QStringLiteral(
+            "UPDATE chip_item SET hardware=?,category=?,model=?,qty=?,function=?,"
+            "country=?,brand=?,remark=?,updated_at=? WHERE id=?"));
+        q.addBindValue(item->hardware);
+        q.addBindValue(item->category);
+        q.addBindValue(item->model);
+        q.addBindValue(item->qty);
+        q.addBindValue(item->function);
+        q.addBindValue(item->country);
+        q.addBindValue(item->brand);
+        q.addBindValue(item->remark);
+        q.addBindValue(now);
+        q.addBindValue(item->id);
+        ok = q.exec();
+    } else {
+        q.prepare(QStringLiteral(
+            "INSERT INTO chip_item(hardware,category,model,qty,function,country,brand,remark,"
+            "creator,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)"));
+        q.addBindValue(item->hardware);
+        q.addBindValue(item->category);
+        q.addBindValue(item->model);
+        q.addBindValue(item->qty);
+        q.addBindValue(item->function);
+        q.addBindValue(item->country);
+        q.addBindValue(item->brand);
+        q.addBindValue(item->remark);
+        q.addBindValue(currentOperator());
+        q.addBindValue(now);
+        q.addBindValue(now);
+        ok = q.exec();
+        if (ok)
+            item->id = q.lastInsertId().toInt();
+    }
+    if (!ok) {
+        if (err) *err = q.lastError().text();
+        return false;
+    }
+    addOpLog(isNew ? QStringLiteral("新增芯片") : QStringLiteral("修改芯片"),
+             item->model, item->hardware,
+             QStringLiteral("%1 · %2 颗").arg(item->model).arg(item->qty));
+    return true;
+}
+
+bool DatabaseManager::chipDelete(int id, QString *err)
+{
+    if (err) err->clear();
+    if (id <= 0)
+        return false;
+    if (!isServer())
+        return RemoteApiClient::instance().chipDelete(id, err);
+    QString oldModel, oldHardware;
+    QSqlQuery g(m_db);
+    g.prepare(QStringLiteral("SELECT model,hardware FROM chip_item WHERE id=?"));
+    g.addBindValue(id);
+    if (g.exec() && g.next()) {
+        oldModel = g.value(0).toString();
+        oldHardware = g.value(1).toString();
+    }
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("DELETE FROM chip_item WHERE id=?"));
+    q.addBindValue(id);
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        return false;
+    }
+    addOpLog(QStringLiteral("删除芯片"), oldModel, oldHardware,
+             QStringLiteral("id=%1").arg(id));
+    return true;
 }
 
 // 历史数据迁移：把控制器 product 表的硬件版本号/软件版本号列搬入 product_ext
@@ -1622,10 +1916,11 @@ int DatabaseManager::saveProduct(Product &p, const QString &changeNote, QString 
         }
         if (p.materialCode.isNull())
             p.materialCode = QStringLiteral(""); // 列是 NOT NULL
-        p.createdAt = old.createdAt;
-        // 首次录入时间保持不变，只刷新修改时间
-        const QString createdAt = old.createdAt.isValid()
-            ? old.createdAt.toString(Qt::ISODate) : now;
+        // 录入页「补充信息 / 修改」会带上本次操作时间，据此刷新 created_at；
+        // Excel 批量导入等未指定时间的入口仍沿用首次录入时间
+        if (!p.createdAt.isValid()) p.createdAt = old.createdAt;
+        const QString createdAt = p.createdAt.isValid()
+            ? p.createdAt.toString(Qt::ISODate) : now;
         QSqlQuery u(m_db);
         u.prepare(QStringLiteral(
             "UPDATE product SET category=?,material_code=?,name=?,model=?,hw_version=?,sw_version=?,"
@@ -1897,6 +2192,33 @@ bool DatabaseManager::updateDrawingMeta(int drawingId, int dtype, const QDate &d
         if (err) *err = q.lastError().text();
         return false;
     }
+    return true;
+}
+
+// 删除单张误录图纸：先删记录，再删归档文件；客户端由服务器代删，本机只清预览缓存。
+// 与 deleteProducts 的区别是只作用于 drawing 表的一行，产品及其它图纸保持不变。
+bool DatabaseManager::deleteDrawing(int drawingId, QString *err)
+{
+    if (!isServer()) return RemoteApiClient::instance().deleteDrawing(drawingId, err);
+    const Drawing d = drawingById(drawingId);
+    if (d.id < 0) {
+        if (err) *err = QStringLiteral("图纸记录不存在或已被删除");
+        return false;
+    }
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("DELETE FROM drawing WHERE id=?"));
+    q.addBindValue(drawingId);
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        return false;
+    }
+    if (!d.filePath.isEmpty())
+        QFile::remove(d.filePath);
+    const Product p = productById(d.productId);
+    QJsonArray rows;
+    rows.append(opRow(QStringLiteral("图纸文件"), QFileInfo(d.filePath).fileName(),
+                      QStringLiteral("（已删除）")));
+    addOpLog(QStringLiteral("删除图纸"), p.model, p.name, opRowsJson(rows));
     return true;
 }
 

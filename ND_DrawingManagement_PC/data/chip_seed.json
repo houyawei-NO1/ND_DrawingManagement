@@ -1,0 +1,1112 @@
+[
+ {
+  "hardware": "SAFE402 2020.6",
+  "type": "主控芯片",
+  "model": "XC2387A104F80LRABKFUMA1",
+  "qty": 1,
+  "function": "运行控制器程序",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "SAFE402 2020.6",
+  "type": "驱动芯片",
+  "model": "TLE7242",
+  "qty": 1,
+  "function": "四通道低侧恒流预驱动器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "SAFE402 2020.6",
+  "type": "电源芯片",
+  "model": "TLE42712GATMA1",
+  "qty": 1,
+  "function": "线性稳压器(LDO)",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "SAFE402 2020.6",
+  "type": "电源芯片",
+  "model": "TLE4250-2G",
+  "qty": 2,
+  "function": "低压差跟踪稳压器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "SAFE402 2020.6",
+  "type": "功率元件",
+  "model": "VND14NV04TR-E",
+  "qty": 4,
+  "function": "功率电子开关",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "SAFE402 2020.6",
+  "type": "信号链芯片",
+  "model": "TLE6250GV33",
+  "qty": 1,
+  "function": "CAN 总线收发器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "SAFE402 2020.6",
+  "type": "信号链芯片",
+  "model": "MAX3227EEAE+T",
+  "qty": 1,
+  "function": "RS232 通信芯片",
+  "country": "美国",
+  "brand": "ADI(亚德诺)/MAXIM(美信)",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2C701",
+  "type": "主控芯片",
+  "model": "SAK-TC1766-192F80HL BD",
+  "qty": 1,
+  "function": "运行控制器程序",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2C701",
+  "type": "驱动芯片",
+  "model": "TLE7242",
+  "qty": 1,
+  "function": "四通道低侧恒流预驱动器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2C701",
+  "type": "电源芯片",
+  "model": "TLE4251D",
+  "qty": 1,
+  "function": "低压差线性稳压器（LDO",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2C701",
+  "type": "电源芯片",
+  "model": "TLE4250-2G",
+  "qty": 2,
+  "function": "低压差跟踪稳压器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2C701",
+  "type": "电源芯片",
+  "model": "TLE7368E",
+  "qty": 1,
+  "function": "多通道电源管理与驱动芯片",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2C701",
+  "type": "功率元件",
+  "model": "VND14NV04TR-E",
+  "qty": 4,
+  "function": "功率电子开关",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2C701",
+  "type": "功率元件",
+  "model": "NCV8406BDTRKG",
+  "qty": 3,
+  "function": "高侧功率开关",
+  "country": "美国",
+  "brand": "安森美",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2C701",
+  "type": "功率元件",
+  "model": "BTS650P",
+  "qty": 1,
+  "function": "智能高侧功率开关",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2C701",
+  "type": "信号链芯片",
+  "model": "TLE6250GV33",
+  "qty": 2,
+  "function": "CAN 总线收发器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2C701",
+  "type": "信号链芯片",
+  "model": "MAX3227EEAE+T",
+  "qty": 1,
+  "function": "RS232 通信芯片",
+  "country": "美国",
+  "brand": "ADI(亚德诺)/MAXIM(美信)",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2C701",
+  "type": "信号链芯片",
+  "model": "LM2903DR",
+  "qty": 2,
+  "function": "双路电压比较器",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2C701",
+  "type": "信号链芯片",
+  "model": "SN74AHC14D",
+  "qty": 3,
+  "function": "施密特触发器反相器",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "VVA2C901",
+  "type": "主控芯片",
+  "model": "SAK-TC1766-192F80HL BD",
+  "qty": 1,
+  "function": "运行控制器程序",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VVA2C901",
+  "type": "驱动芯片",
+  "model": "TLE7242",
+  "qty": 1,
+  "function": "四通道低侧恒流预驱动器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VVA2C901",
+  "type": "电源芯片",
+  "model": "TLE4251D",
+  "qty": 1,
+  "function": "低压差线性稳压器（LDO）",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VVA2C901",
+  "type": "电源芯片",
+  "model": "TLE7368E",
+  "qty": 1,
+  "function": "多通道电源管理与驱动芯片",
+  "country": "",
+  "brand": "",
+  "remark": ""
+ },
+ {
+  "hardware": "VVA2C901",
+  "type": "功率元件",
+  "model": "VND14NV04TR-E",
+  "qty": 4,
+  "function": "功率电子开关",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "VVA2C901",
+  "type": "功率元件",
+  "model": "BTS50085-1TMA",
+  "qty": 7,
+  "function": "智能高侧功率开关",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VVA2C901",
+  "type": "信号链芯片",
+  "model": "TLE6250GV33",
+  "qty": 2,
+  "function": "CAN 总线收发器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VVA2C901",
+  "type": "信号链芯片",
+  "model": "MAX3227EEAE+T",
+  "qty": 1,
+  "function": "RS232 通信芯片",
+  "country": "美国",
+  "brand": "ADI(亚德诺)/MAXIM(美信)",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X902",
+  "type": "主控芯片",
+  "model": "SAK-TC1766-192F80HL BD",
+  "qty": 1,
+  "function": "运行控制器程序",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X902",
+  "type": "驱动芯片",
+  "model": "TLE7242",
+  "qty": 3,
+  "function": "四通道低侧恒流预驱动器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X902",
+  "type": "电源芯片",
+  "model": "TLE4251D",
+  "qty": 1,
+  "function": "低压差线性稳压器（LDO",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X902",
+  "type": "电源芯片",
+  "model": "TLE4250-2G",
+  "qty": 2,
+  "function": "低压差跟踪稳压器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X902",
+  "type": "电源芯片",
+  "model": "TLE7368E",
+  "qty": 1,
+  "function": "多通道电源管理与驱动芯片",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X902",
+  "type": "功率元件",
+  "model": "VND14NV04TR-E",
+  "qty": 12,
+  "function": "功率电子开关",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X902",
+  "type": "功率元件",
+  "model": "BTS650P",
+  "qty": 3,
+  "function": "智能高侧功率开关",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X902",
+  "type": "信号链芯片",
+  "model": "TLE6250GV33",
+  "qty": 2,
+  "function": "CAN 总线收发器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X902",
+  "type": "信号链芯片",
+  "model": "MAX3227EEAE+T",
+  "qty": 1,
+  "function": "RS232 通信芯片",
+  "country": "美国",
+  "brand": "ADI(亚德诺)/MAXIM(美信)",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X1202",
+  "type": "主控芯片",
+  "model": "SAK-TC1766-192F80HL BD",
+  "qty": 1,
+  "function": "运行控制器程序",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X1202",
+  "type": "驱动芯片",
+  "model": "TLE7242",
+  "qty": 3,
+  "function": "四通道低侧恒流预驱动器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X1202",
+  "type": "电源芯片",
+  "model": "TLE4251D",
+  "qty": 1,
+  "function": "低压差线性稳压器（LDO",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X1202",
+  "type": "电源芯片",
+  "model": "TLE4250-2G",
+  "qty": 2,
+  "function": "低压差跟踪稳压器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X1202",
+  "type": "电源芯片",
+  "model": "TLE7368E",
+  "qty": 1,
+  "function": "多通道电源管理与驱动芯片",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X1202",
+  "type": "功率元件",
+  "model": "VND14NV04TR-E",
+  "qty": 12,
+  "function": "功率电子开关",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X1202",
+  "type": "功率元件",
+  "model": "BTS50085-1TMA",
+  "qty": 3,
+  "function": "智能高侧功率开关",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X1202",
+  "type": "信号链芯片",
+  "model": "TLE6250GV33",
+  "qty": 2,
+  "function": "CAN 总线收发器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "VTA2X1202",
+  "type": "信号链芯片",
+  "model": "MAX3227EEAE+T",
+  "qty": 1,
+  "function": "RS232 通信芯片",
+  "country": "美国",
+  "brand": "ADI(亚德诺)/MAXIM(美信)",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC9-2 V1.2.1",
+  "type": "驱动芯片",
+  "model": "TLE7242",
+  "qty": 2,
+  "function": "四通道低侧恒流预驱动器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC9-2 V1.2.1",
+  "type": "电源芯片",
+  "model": "LM2596S-5.0/NOPB",
+  "qty": 1,
+  "function": "开关型 DC-DC 降压稳压器",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC9-2 V1.2.1",
+  "type": "电源芯片",
+  "model": "L7805CDT-TR",
+  "qty": 1,
+  "function": "三端线性稳压器",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC9-2 V1.2.1",
+  "type": "功率元件",
+  "model": "VND14NV04TR-E",
+  "qty": 8,
+  "function": "功率电子开关",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC9-2 V1.2.1",
+  "type": "功率元件",
+  "model": "BTS50025-1TEA",
+  "qty": 2,
+  "function": "智能高侧功率开关",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC9-2 V1.2.1",
+  "type": "信号链芯片",
+  "model": "TJA1050T/CM",
+  "qty": 2,
+  "function": "CAN 总线收发器",
+  "country": "荷兰",
+  "brand": "恩智浦（NXP）",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC9-2-B V1.0",
+  "type": "驱动芯片",
+  "model": "TLE7242",
+  "qty": 2,
+  "function": "四通道低侧恒流预驱动器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC9-2-B V1.0",
+  "type": "电源芯片",
+  "model": "LM2596S-5.0/NOPB",
+  "qty": 1,
+  "function": "开关型 DC-DC 降压稳压器",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC9-2-B V1.0",
+  "type": "电源芯片",
+  "model": "L7805CDT-TR",
+  "qty": 1,
+  "function": "三端线性稳压器",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC9-2-B V1.0",
+  "type": "功率元件",
+  "model": "VND14NV04TR-E",
+  "qty": 8,
+  "function": "功率电子开关",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC9-2-B V1.0",
+  "type": "功率元件",
+  "model": "BTS50025-1TEA",
+  "qty": 2,
+  "function": "智能高侧功率开关",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC9-2-B V1.0",
+  "type": "信号链芯片",
+  "model": "TJA1050T/CM",
+  "qty": 2,
+  "function": "CAN 总线收发器",
+  "country": "荷兰",
+  "brand": "恩智浦（NXP）",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "主控芯片",
+  "model": "TC375TP96F300WAAKXUMA1",
+  "qty": 1,
+  "function": "运行控制器程序",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "驱动芯片",
+  "model": "TLE92464ED",
+  "qty": 5,
+  "function": "四通道低边恒流预驱动",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "电源芯片",
+  "model": "TLF35584QVVS1",
+  "qty": 1,
+  "function": "多输出系统电源管理",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "电源芯片",
+  "model": "TLS205B0EJ V33",
+  "qty": 1,
+  "function": "3.3V 输出 LDO",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "电源芯片",
+  "model": "TLF11251EP",
+  "qty": 1,
+  "function": "BUCK 降压芯片",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "电源芯片",
+  "model": "TLE4251D",
+  "qty": 2,
+  "function": "低压差线性稳压器（LDO",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "电源芯片",
+  "model": "TLE4253GS",
+  "qty": 4,
+  "function": "固定 5V 输出 LDO",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "功率元件",
+  "model": "VN5016AJTR-E",
+  "qty": 4,
+  "function": "高边功率 MOS 开关",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "功率元件",
+  "model": "SUM110P08-11L-E3",
+  "qty": 1,
+  "function": "P 沟道功率 MOS",
+  "country": "美国",
+  "brand": "威士",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "功率元件",
+  "model": "BSL606SN",
+  "qty": 1,
+  "function": "N 沟道功率 MOS",
+  "country": "荷兰",
+  "brand": "恩智浦（NXP）",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "信号链芯片",
+  "model": "TLE9351BSJ",
+  "qty": 4,
+  "function": "汽车级 CAN 总线收发器",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "信号链芯片",
+  "model": "MAX3232EIPWR",
+  "qty": 1,
+  "function": "双通道 RS232 收发器",
+  "country": "美国",
+  "brand": "美信",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "信号链芯片",
+  "model": "DP83825IRMQR",
+  "qty": 1,
+  "function": "以太网 PHY 收发器",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "信号链芯片",
+  "model": "LT1716HS5",
+  "qty": 7,
+  "function": "高精度电压比较器",
+  "country": "美国",
+  "brand": "ADI(亚德诺)",
+  "remark": ""
+ },
+ {
+  "hardware": "NDC16-8",
+  "type": "信号链芯片",
+  "model": "LT1783CS5",
+  "qty": 10,
+  "function": "低压电压比较器",
+  "country": "美国",
+  "brand": "ADI(亚德诺)",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_001",
+  "type": "主控芯片",
+  "model": "SAK-TC377TP-96F300S AA",
+  "qty": 1,
+  "function": "运行控制器程序",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_001",
+  "type": "驱动芯片",
+  "model": "TLE92464ED",
+  "qty": 3,
+  "function": "四通道低边恒流预驱动",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_001",
+  "type": "驱动芯片",
+  "model": "VND5T016ASPTR-E",
+  "qty": 8,
+  "function": "高端功率负载驱动",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_001",
+  "type": "驱动芯片",
+  "model": "VN5T006ASPTR-E",
+  "qty": 3,
+  "function": "低端功率负载驱动",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_001",
+  "type": "驱动芯片",
+  "model": "NCV8406ADTRKG",
+  "qty": 2,
+  "function": "高边开关驱动",
+  "country": "美国",
+  "brand": "安森美",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_001",
+  "type": "电源芯片",
+  "model": "LMR16030SDDAR",
+  "qty": 1,
+  "function": "降压 DC-DC 电源芯片",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_001",
+  "type": "电源芯片",
+  "model": "TLV75733PDBVR",
+  "qty": 1,
+  "function": "LDO 线性稳压芯片",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_001",
+  "type": "电源芯片",
+  "model": "TLE8366EV",
+  "qty": 1,
+  "function": "电源管理芯片",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_001",
+  "type": "电源芯片",
+  "model": "TLE4251D",
+  "qty": 2,
+  "function": "低压差线性稳压器（LDO",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_001",
+  "type": "功率元件",
+  "model": "IPG20N10S4L-22",
+  "qty": 4,
+  "function": "大功率 MOSFET",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_001",
+  "type": "信号链芯片",
+  "model": "TCAN1042VDRBRQ1",
+  "qty": 6,
+  "function": "CAN 总线收发器",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_002",
+  "type": "主控芯片",
+  "model": "SAK-TC377TP-96F300S AA",
+  "qty": 1,
+  "function": "运行控制器程序",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_002",
+  "type": "驱动芯片",
+  "model": "TLE92464ED",
+  "qty": 1,
+  "function": "四通道低边恒流预驱动",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_002",
+  "type": "驱动芯片",
+  "model": "VND5T016ASPTR-E",
+  "qty": 1,
+  "function": "高端功率负载驱动",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_002",
+  "type": "驱动芯片",
+  "model": "VN5T006ASPTR-E",
+  "qty": 1,
+  "function": "低端功率负载驱动",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_002",
+  "type": "驱动芯片",
+  "model": "NCV8406ADTRKG",
+  "qty": 1,
+  "function": "高边开关驱动",
+  "country": "美国",
+  "brand": "安森美",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_002",
+  "type": "电源芯片",
+  "model": "LMR16030SDDAR",
+  "qty": 1,
+  "function": "降压 DC-DC 电源芯片",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_002",
+  "type": "电源芯片",
+  "model": "TLV75733PDBVR",
+  "qty": 1,
+  "function": "LDO 线性稳压芯片",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_002",
+  "type": "电源芯片",
+  "model": "TLE8366EV",
+  "qty": 1,
+  "function": "电源管理芯片",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_002",
+  "type": "电源芯片",
+  "model": "TLE4251D",
+  "qty": 1,
+  "function": "低压差线性稳压器（LDO",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_002",
+  "type": "功率元件",
+  "model": "NVMFS5113PLT1G",
+  "qty": 1,
+  "function": "功率开关控制",
+  "country": "美国",
+  "brand": "安森美",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_002",
+  "type": "信号链芯片",
+  "model": "TCAN1042VDRBRQ1",
+  "qty": 6,
+  "function": "CAN 总线收发器",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_003",
+  "type": "主控芯片",
+  "model": "SAK-TC377TP-96F300S AA",
+  "qty": 1,
+  "function": "运行控制器程序",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_003",
+  "type": "驱动芯片",
+  "model": "TLE92464ED",
+  "qty": 1,
+  "function": "四通道低边恒流预驱动",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_003",
+  "type": "驱动芯片",
+  "model": "VN5T006ASPTR-E",
+  "qty": 1,
+  "function": "低端功率负载驱动",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_003",
+  "type": "驱动芯片",
+  "model": "NCV8406ADTRKG",
+  "qty": 1,
+  "function": "高边开关驱动",
+  "country": "美国",
+  "brand": "安森美",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_003",
+  "type": "电源芯片",
+  "model": "TLV75733PDBVR",
+  "qty": 1,
+  "function": "LDO 线性稳压芯片",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_003",
+  "type": "电源芯片",
+  "model": "TLE8366EV",
+  "qty": 1,
+  "function": "电源管理芯片",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_003",
+  "type": "电源芯片",
+  "model": "TLE4251D",
+  "qty": 1,
+  "function": "低压差线性稳压器（LDO",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_003",
+  "type": "功率元件",
+  "model": "NVMFS5113PLT1G",
+  "qty": 1,
+  "function": "功率开关控制",
+  "country": "美国",
+  "brand": "安森美",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_003",
+  "type": "信号链芯片",
+  "model": "TCAN1042VDRBRQ1",
+  "qty": 6,
+  "function": "CAN 总线收发器",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_004",
+  "type": "主控芯片",
+  "model": "SAK-TC377TP-96F300S AA",
+  "qty": 1,
+  "function": "运行控制器程序",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_004",
+  "type": "驱动芯片",
+  "model": "TLE92464ED",
+  "qty": 1,
+  "function": "四通道低边恒流预驱动",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_004",
+  "type": "驱动芯片",
+  "model": "VN5T006ASPTR-E",
+  "qty": 1,
+  "function": "低端功率负载驱动",
+  "country": "瑞士",
+  "brand": "意法半导体",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_004",
+  "type": "电源芯片",
+  "model": "TLV75733PDBVR",
+  "qty": 1,
+  "function": "LDO 线性稳压芯片",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_004",
+  "type": "电源芯片",
+  "model": "TLE4251D",
+  "qty": 2,
+  "function": "低压差线性稳压器（LDO",
+  "country": "德国",
+  "brand": "英飞凌",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_004",
+  "type": "电源芯片",
+  "model": "LMR16030SDDAR",
+  "qty": 2,
+  "function": "降压 DC-DC 电源芯片",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_004",
+  "type": "功率元件",
+  "model": "NVMFS5113PLT1G",
+  "qty": 1,
+  "function": "功率开关控制",
+  "country": "美国",
+  "brand": "安森美",
+  "remark": ""
+ },
+ {
+  "hardware": "TC377_004",
+  "type": "信号链芯片",
+  "model": "TCAN1042VDRBRQ1",
+  "qty": 6,
+  "function": "CAN 总线收发器",
+  "country": "美国",
+  "brand": "德州仪器（TI）",
+  "remark": ""
+ }
+]

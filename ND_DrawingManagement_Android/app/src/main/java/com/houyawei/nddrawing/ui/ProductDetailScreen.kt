@@ -17,12 +17,15 @@ import androidx.navigation.NavHostController
 import com.houyawei.nddrawing.data.Drawing
 import com.houyawei.nddrawing.data.Product
 import com.houyawei.nddrawing.data.Repository
+import java.io.File
 
 @Composable
 fun ProductDetailScreen(id: Int, nav: NavHostController) {
     val product = remember { Repository.db.productById(id) }
     val drawings = remember { Repository.db.drawingsOf(id) }
     val ctx = LocalContext.current
+    // 进入产品页时只补本型号缺失的图纸；不写数据库，文件落在「南都图纸」目录
+    val sync = rememberProductDrawingSync(drawings)
     var showAbout by remember { mutableStateOf(false) }
     var showShare by remember { mutableStateOf(false) }
 
@@ -85,8 +88,15 @@ fun ProductDetailScreen(id: Int, nav: NavHostController) {
 
             Spacer(Modifier.height(16.dp))
             Text("图纸（${drawings.size}）", style = MaterialTheme.typography.titleMedium)
+            if (sync.status.isNotEmpty()) {
+                Text(
+                    sync.status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
             Spacer(Modifier.height(8.dp))
-            drawings.forEach { d -> DrawingItem(d) }
+            drawings.forEach { d -> DrawingItem(d, sync.revision) }
 
             Spacer(Modifier.height(16.dp))
             Button(
@@ -105,8 +115,11 @@ fun ProductDetailScreen(id: Int, nav: NavHostController) {
             onImage = {
                 showShare = false
                 // 图片分享：一次性分享该产品所有图纸图片；无图片图纸时兜底分享文字
-                val imgs = drawings.filter { !it.format.equals("pdf", true) && it.localPath.isNotEmpty() }
-                if (imgs.isNotEmpty()) shareImageFiles(ctx, imgs.map { it.localPath }) else shareText(ctx, detailText)
+                val imgs = drawings.filter {
+                    !it.format.equals("pdf", true) && File(localDrawingPath(it)).exists()
+                }
+                if (imgs.isNotEmpty()) shareImageFiles(ctx, imgs.map { localDrawingPath(it) })
+                else shareText(ctx, detailText)
             },
             onDismiss = { showShare = false }
         )
@@ -122,21 +135,30 @@ private fun InfoRow(label: String, value: String) {
 }
 
 @Composable
-private fun DrawingItem(d: Drawing) {
+private fun DrawingItem(d: Drawing, revision: Int) {
     val ctx = LocalContext.current
     val label = (if (d.dtype == 1) "会签图" else "下发图") +
             if (d.drawingDate.isNotEmpty()) "  ${d.drawingDate}" else ""
     var showViewer by remember { mutableStateOf(false) }
+    // 数据库没写 local_path 时，按 relPath 找刚从局域网补下来的文件
+    val path = localDrawingPath(d)
     Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Column(Modifier.fillMaxWidth().padding(12.dp)) {
             Text(label, style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(4.dp))
             if (d.format.equals("pdf", true)) {
-                OutlinedButton(onClick = { openPdf(ctx, d.localPath) }) {
-                    Text("打开 PDF：${d.fileName}")
+                if (File(path).exists()) {
+                    OutlinedButton(onClick = { openPdf(ctx, path) }) {
+                        Text("打开 PDF：${d.fileName}")
+                    }
+                } else {
+                    Text(
+                        "（PDF 未下载或文件缺失：${d.fileName}）",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             } else {
-                val bmp = remember(d.localPath) { loadBitmap(d.localPath) }
+                val bmp = remember(path, revision) { loadBitmap(path) }
                 if (bmp != null) {
                     Image(
                         bmp, contentDescription = d.fileName,
@@ -159,6 +181,6 @@ private fun DrawingItem(d: Drawing) {
         }
     }
     if (showViewer) {
-        ImageViewerDialog(path = d.localPath, onClose = { showViewer = false })
+        ImageViewerDialog(path = path, onClose = { showViewer = false })
     }
 }

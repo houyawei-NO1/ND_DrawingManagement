@@ -1,4 +1,5 @@
 #include "toolspage.h"
+#include "chipquerypage.h"
 #include "db/databasemanager.h"
 #include "server/remoteapiclient.h"
 #include "server/updatemanager.h"
@@ -117,6 +118,8 @@ ToolsPage::ToolsPage(QWidget *parent) : QWidget(parent)
     QVBoxLayout *root = new QVBoxLayout(this);
     m_tabs = new QTabWidget(this);
     m_tabs->addTab(buildStockPage(), QStringLiteral("库存查询"));
+    m_chipPage = new ChipQueryPage(this);
+    m_tabs->addTab(m_chipPage, QStringLiteral("芯片查询"));
     m_tabs->addTab(buildAboutPage(), QStringLiteral("关于"));
     root->addWidget(m_tabs);
 
@@ -132,6 +135,15 @@ void ToolsPage::onPageShown()
     // 客户端离线时 combo 会被清空，下次进入工具页会再试一次；已有批次则不再发请求
     if (m_cmbStockBatch && m_cmbStockBatch->count() == 0)
         refreshStockBatches();
+    // 芯片查询每次进入工具页都重新取一次，保证看到别人刚新增/修改的数据
+    if (m_chipPage)
+        m_chipPage->refresh();
+}
+
+void ToolsPage::setLoggedIn(const QString &user)
+{
+    if (m_chipPage)
+        m_chipPage->setLoggedIn(user);
 }
 
 // ==================== 库存查询 ====================

@@ -61,7 +61,7 @@ class SyncClient(private val baseUrl: String) {
         total: Int,
         onProgress: (Int) -> Unit = {}
     ): FileResult = withContext(Dispatchers.IO) {
-        val local = resolveLocal(baseDir, relPath)
+        val local = localDrawingFile(baseDir, relPath)
         val url = "$baseUrl/api/sync/file?path=${enc(relPath)}&i=$index&total=$total"
         // 数据库小，每次都同步；图纸大，做存在+大小检查避免重复下载
         val expected = headSize(url)
@@ -119,18 +119,20 @@ class SyncClient(private val baseUrl: String) {
         FileResult(DownloadResult.Failed, "", 3, 0, expected, lastErr?.message ?: "未知错误")
     }
 
-    // 将服务端相对路径（分类/型号/图纸名）映射到 baseDir 下，并对每一级做非法字符净化
-    private fun resolveLocal(baseDir: File, relPath: String): File {
-        val segs = relPath.replace('\\', '/').split('/').filter { it.isNotEmpty() }
-        val safe = segs.map { safeSegment(it) }
-        return File(baseDir, safe.joinToString("/"))
-    }
-
-    // 与电脑端 safeFileName 一致的净化规则：剔除 / \ : * ? " < > |
-    private fun safeSegment(s: String): String {
-        val r = s.map { c -> if (c in "/\\:*?\"<>|") '_' else c }.joinToString("")
-        val t = r.trim()
-        return if (t.isEmpty()) "未命名" else t
+    // 短超时探测服务器是否可达：手机不在同一局域网 / PC 未开服务时，
+    // 详情页要立刻放弃补图，避免逐张连接超时把页面拖住
+    suspend fun probe(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val c = URL("$baseUrl/api/sync/schema").openConnection() as HttpURLConnection
+            c.connectTimeout = 2000
+            c.readTimeout = 2000
+            c.setRequestProperty("Connection", "close")
+            val ok = c.responseCode == 200
+            c.disconnect()
+            ok
+        } catch (_: Exception) {
+            false
+        }
     }
 
     // 拉取产品分类（与 PC DatabaseManager::categories 一致）
@@ -258,4 +260,18 @@ internal fun parseDrawings(arr: JSONArray): List<Drawing> {
         )
     }
     return out
+}
+
+// 服务端相对路径（分类/名称 型号/图纸名）→ 本机「南都图纸」目录下的文件。
+// 下载与详情页预览共用同一套映射，保证落到图纸管理页能扫描/删除的位置。
+fun localDrawingFile(baseDir: File, relPath: String): File {
+    val segs = relPath.replace('\\', '/').split('/').filter { it.isNotEmpty() }
+    return File(baseDir, segs.map { safeDrawingSegment(it) }.joinToString("/"))
+}
+
+// 与电脑端 safeFileName 一致的净化规则：剔除 / \ : * ? " < > |
+private fun safeDrawingSegment(s: String): String {
+    val r = s.map { c -> if (c in "/\\:*?\"<>|") '_' else c }.joinToString("")
+    val t = r.trim()
+    return if (t.isEmpty()) "未命名" else t
 }

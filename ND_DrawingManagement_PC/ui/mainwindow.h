@@ -4,6 +4,7 @@
 #include <QWidget>
 #include "overlaymask.h"
 #include <QList>
+#include <QStringList>
 #include <QTimer>
 #include "model/product.h"
 
@@ -11,6 +12,7 @@ class QLineEdit;
 class QPushButton;
 class QComboBox;
 class QTableWidget;
+class QCheckBox;
 class QLabel;
 class QButtonGroup;
 class QTextBrowser;
@@ -19,6 +21,9 @@ class QSplitter;
 class QMouseEvent;
 class QEvent;
 class QStackedWidget;
+class QProcess;
+class OcrImageDrop;
+class OcrResultPopup;
 class QPdfDocument;
 class QPdfView;
 class LanHttpServer;
@@ -72,6 +77,13 @@ private:
     void clearClientCache();              // 客户端：清理本机图纸预览缓存
     void applyStyle();
 
+    // 图片拖入 → 异步 OCR → 多型号一次性搜索
+    void onImageDropped(const QString &path);
+    void onOcrFinished(bool ok, const QString &text);
+    void clearOcrSearch(bool resetSearchText = true, bool refresh = true);
+    void positionOcrPopup();
+    QList<int> ocrMatchCounts() const; // 弹窗里每个识别型号的命中条数
+
     // 标题栏
     QPoint m_dragPos;
     bool m_dragging = false;
@@ -86,6 +98,15 @@ private:
     QLineEdit *m_searchEdit = nullptr;
     QPushButton *m_btnSearch = nullptr;
     QComboBox *m_cmbDrawingType = nullptr;
+    OcrImageDrop *m_imgDrop = nullptr;      // 工具栏「拖入图片」框
+    QCheckBox *m_chkExactModel = nullptr;   // 「型号一致」：勾选后只搜完全相同的型号
+    OcrResultPopup *m_ocrPopup = nullptr;   // 右侧半透明 OCR 结果浮层
+    QProcess *m_ocrProc = nullptr;          // 当前 OCR 进程（换图时中止）
+    QWidget *m_ocrResultBar = nullptr;      // 表格上方的搜索结果提示条
+    QLabel *m_ocrResultLabel = nullptr;
+    QStringList m_ocrModels;               // 非空 = 多型号搜索模式（已按库纠错）
+    QStringList m_ocrRawModels;            // 纠错前的原始 OCR 型号，弹窗里标注用
+    QString m_ocrRawText;                  // OCR 原文，切换精确/包含时重刷弹窗用
 
     // 列表
     QTableWidget *m_table = nullptr;

@@ -50,6 +50,11 @@
 #include <QPdfView>
 #include <QStackedWidget>
 #include <QListWidget>
+#include <QListView>
+#include <QGridLayout>
+#include <QFrame>
+#include <QIcon>
+#include <QStyle>
 #include <QMenu>
 #include <QAction>
 #include <QCoreApplication>
@@ -96,6 +101,85 @@ static QRect titleBlockRect(const QImage &img)
     const int y = qRound(img.height() * 0.45);
     return QRect(x, y, img.width() - x, img.height() - y);
 }
+
+// 生成缩略图：图片直接等比缩放，PDF 渲染首页并铺白底（透明底在深色主题下会发黑）
+static QPixmap makeThumbPixmap(const QString &path)
+{
+    if (path.isEmpty()) return QPixmap();
+    if (QFileInfo(path).suffix().compare(QStringLiteral("pdf"), Qt::CaseInsensitive) == 0) {
+        QPdfDocument doc;
+        if (doc.load(path) == QPdfDocument::Error::None && doc.pageCount() > 0) {
+            const QSizeF ps = doc.pagePointSize(0);
+            QSize target(84, 60);
+            if (ps.width() > 0 && ps.height() > 0)
+                target = ps.scaled(QSizeF(84, 60), Qt::KeepAspectRatio).toSize();
+            const QImage img = doc.render(0, target);
+            if (!img.isNull()) {
+                QImage canvas(img.size(), QImage::Format_RGB32);
+                canvas.fill(Qt::white);
+                QPainter p(&canvas);
+                p.drawImage(0, 0, img);
+                p.end();
+                return QPixmap::fromImage(canvas);
+            }
+        }
+        return QPixmap();
+    }
+    const QImage img = loadImageOriented(path);
+    if (img.isNull()) return QPixmap();
+    return QPixmap::fromImage(img.scaled(QSize(84, 60), Qt::KeepAspectRatio,
+                                         Qt::SmoothTransformation));
+}
+
+// 缩略图卡片：大按钮显示图纸并负责切换预览，右上角红色 × 负责删除这一张
+class ThumbCard : public QFrame
+{
+public:
+    ThumbCard(const QPixmap &pm, const QString &caption, const QString &tip, QWidget *parent)
+        : QFrame(parent)
+    {
+        setFixedSize(94, 92);
+        setStyleSheet(cardStyle(false));
+        m_preview = new QPushButton(this);
+        m_preview->setGeometry(5, 5, 84, 60);
+        m_preview->setCursor(Qt::PointingHandCursor);
+        m_preview->setToolTip(tip);
+        m_preview->setIcon(QIcon(pm.isNull()
+            ? style()->standardIcon(QStyle::SP_FileIcon).pixmap(QSize(40, 40)) : pm));
+        m_preview->setIconSize(QSize(80, 56));
+        m_preview->setStyleSheet(QStringLiteral(
+            "QPushButton{background:#1A2032;border:none;border-radius:4px;}"
+            "QPushButton:hover{background:#2A344C;}"));
+        m_del = new QPushButton(QStringLiteral("×"), this);
+        m_del->setGeometry(71, 1, 20, 20);
+        m_del->setCursor(Qt::PointingHandCursor);
+        m_del->setToolTip(QStringLiteral("删除这张图纸"));
+        m_del->setStyleSheet(QStringLiteral(
+            "QPushButton{background:#E06C75;color:#ffffff;border:1px solid #22293C;"
+            "border-radius:10px;font:bold 15px;padding:0;}"
+            "QPushButton:hover{background:#F07C85;}"));
+        QLabel *cap = new QLabel(caption, this);
+        cap->setGeometry(4, 67, 86, 20);
+        cap->setAlignment(Qt::AlignCenter);
+        cap->setToolTip(tip);
+        cap->setStyleSheet(QStringLiteral(
+            "QLabel{color:rgba(255,255,255,0.8);background:transparent;}"));
+    }
+
+    QPushButton *previewButton() const { return m_preview; }
+    QPushButton *deleteButton() const { return m_del; }
+    void setSelected(bool on) { setStyleSheet(cardStyle(on)); }
+
+private:
+    static QString cardStyle(bool selected)
+    {
+        return QStringLiteral("QFrame{background:#22293C;border:1px solid %1;border-radius:6px;}")
+            .arg(selected ? QStringLiteral("#43CF7C") : QStringLiteral("#4A5468"));
+    }
+
+    QPushButton *m_preview = nullptr;
+    QPushButton *m_del = nullptr;
+};
 
 // 进度条样式：与深色主题一致，默认 0..0 表示“处理中”的不确定进度
 static void styleBar(QProgressBar *bar)
@@ -179,9 +263,14 @@ EntryDialog::EntryDialog(QWidget *parent) : QWidget(parent)
     // ① 图纸文件
     QGroupBox *grpFile = new QGroupBox(QStringLiteral("① 选择图纸文件（图片 / PDF，可直接拖入，或按 Ctrl+V 粘贴）"), this);
     QVBoxLayout *grpFileLay = new QVBoxLayout(grpFile);
-    // 拖放/预览区：图片用 QLabel 缩略，PDF 用 QPdfView 渲染，二者用 QStackedWidget 切换
-    m_previewStack = new QStackedWidget(grpFile);
-    m_previewStack->setMinimumHeight(240);
+    // 拖放/预览区：图片用 QLabel 缩略，PDF 用 QPdfView 渲染，二者用 QStackedWidget 切换。
+    // 外面套一层网格布局，用于把「删除当前图纸」按钮叠在大预览右上角
+    QWidget *previewHost = new QWidget(grpFile);
+    QGridLayout *previewLay = new QGridLayout(previewHost);
+    previewLay->setContentsMargins(0, 0, 0, 0);
+    previewLay->setSpacing(0);
+    m_previewStack = new QStackedWidget(previewHost);
+    m_previewStack->setMinimumHeight(200);
     m_filePreview = new QLabel(QStringLiteral("点击「选择文件…」、拖入文件，或按 Ctrl+V 粘贴"), m_previewStack);
     m_filePreview->setAlignment(Qt::AlignCenter);
     m_filePreview->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -198,21 +287,47 @@ EntryDialog::EntryDialog(QWidget *parent) : QWidget(parent)
     m_pdfView->setPageMode(QPdfView::PageMode::SinglePage);
     m_pdfView->setZoomMode(QPdfView::ZoomMode::FitInView);
     m_previewStack->addWidget(m_pdfView);
-    grpFileLay->addWidget(m_previewStack);
-    // 附件列表：同一型号可拖入多张（如 PDF + 图片），逐条列出，点击切换预览
+    previewLay->addWidget(m_previewStack, 0, 0);
+    m_btnDeleteCurrent = new QPushButton(QStringLiteral("删除当前图纸"), previewHost);
+    m_btnDeleteCurrent->setObjectName(QStringLiteral("btnDanger"));
+    m_btnDeleteCurrent->setCursor(Qt::PointingHandCursor);
+    m_btnDeleteCurrent->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    m_btnDeleteCurrent->setStyleSheet(QStringLiteral(
+        "QPushButton{background:#E06C75;color:#ffffff;border:none;"
+        "border-radius:6px;padding:5px 10px;font-weight:bold;}"
+        "QPushButton:hover{background:#C9606A;}"));
+    m_btnDeleteCurrent->setToolTip(QStringLiteral(
+        "删除当前预览的图纸；若是本次新增的附件，则只从本次录入中移除"));
+    m_btnDeleteCurrent->hide();
+    previewLay->addWidget(m_btnDeleteCurrent, 0, 0, Qt::AlignTop | Qt::AlignRight);
+    connect(m_btnDeleteCurrent, &QPushButton::clicked,
+            this, &EntryDialog::onDeleteCurrentDrawing);
+    grpFileLay->addWidget(previewHost);
+
+    // 缩略图条：编辑模式列出该产品已挂接的全部图纸，新增模式列出本次选入的全部附件。
+    // 每张卡片都能点开预览，并各自带一个删除键（类似主界面「更多图纸」，但可逐张删除）
+    m_thumbTitle = new QLabel(QStringLiteral("图纸文件"), grpFile);
+    m_thumbTitle->setStyleSheet(QStringLiteral("color:rgba(255,255,255,0.65);"));
     m_attachList = new QListWidget(grpFile);
-    m_attachList->setMaximumHeight(88);
-    m_attachList->setSelectionMode(QAbstractItemView::SingleSelection);
+    // 用 ListMode 水平排列自定义卡片：itemWidget 在这种模式下布局最稳定
+    m_attachList->setViewMode(QListView::ListMode);
+    m_attachList->setFlow(QListView::LeftToRight);
+    m_attachList->setWrapping(false);
+    m_attachList->setMovement(QListView::Static);
+    m_attachList->setResizeMode(QListView::Fixed);
+    m_attachList->setSelectionMode(QAbstractItemView::NoSelection);
+    m_attachList->setFixedHeight(104);
+    m_attachList->setSpacing(4);
     m_attachList->setStyleSheet(QStringLiteral(
-        "QListWidget{background:#22293C;border:1px solid #4A5468;border-radius:6px;"
-        "color:rgba(255,255,255,0.85);}"
-        "QListWidget::item{padding:4px 6px;}"
-        "QListWidget::item:selected{background:#1E3B2C;color:#43CF7C;}"));
-    m_attachList->setVisible(false); // 只有一个附件时不占空间
+        "QListWidget{background:#1A2032;border:1px solid #4A5468;border-radius:6px;"
+        "color:rgba(255,255,255,0.85);}"));
     m_attachList->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_attachList, &QListWidget::itemClicked, this, &EntryDialog::onAttachClicked);
     connect(m_attachList, &QListWidget::customContextMenuRequested,
             this, &EntryDialog::onAttachContextMenu);
+    m_thumbTitle->hide();
+    m_attachList->hide();
+    grpFileLay->addWidget(m_thumbTitle);
     grpFileLay->addWidget(m_attachList);
     QHBoxLayout *fileLay = new QHBoxLayout();
     m_fileLabel = new QLabel(QStringLiteral("未选择文件"), grpFile);
@@ -368,9 +483,9 @@ EntryDialog::EntryDialog(QWidget *parent) : QWidget(parent)
 
     // Ctrl+V 粘贴图片或图纸文件：只绑定到「产品录入」页，
     // 避免抢占「数量录入」页里内嵌 OCR 弹窗自己的 Ctrl+V 粘贴
-    auto *pasteShortcut = new QShortcut(QKeySequence::Paste, productPage);
-    pasteShortcut->setContext(Qt::WidgetWithChildrenShortcut);
-    connect(pasteShortcut, &QShortcut::activated, this, &EntryDialog::onPaste);
+    m_pasteShortcut = new QShortcut(QKeySequence::Paste, productPage);
+    m_pasteShortcut->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(m_pasteShortcut, &QShortcut::activated, this, &EntryDialog::onPaste);
 
     // 数量录入页：内联嵌入的「数量录入」弹窗（最小/最大数量在管理页「数量管理」单产品设置）
     QWidget *qtyPage = new QWidget(this);
@@ -378,22 +493,36 @@ EntryDialog::EntryDialog(QWidget *parent) : QWidget(parent)
     qpLay->setContentsMargins(16, 16, 16, 16);
     qpLay->setSpacing(12);
 
-    auto *qtyDlg = new MaterialCodeDialog(qtyPage, MaterialCodeDialog::Quantity, true);
-    qtyDlg->setPasteEnabled(false); // 默认在「产品录入」页，数量页的 Ctrl+V 先关掉
-    qpLay->addWidget(qtyDlg, 1);
+    m_qtyPanel = new MaterialCodeDialog(qtyPage, MaterialCodeDialog::Quantity, true);
+    m_qtyPanel->setPasteEnabled(false); // 默认在「产品录入」页，数量页的 Ctrl+V 先关掉
+    qpLay->addWidget(m_qtyPanel, 1);
 
     m_tabs->addWidget(qtyPage);
 
     connect(m_tabGroup, QOverload<QAbstractButton *>::of(&QButtonGroup::buttonClicked),
-            this, [this, pasteShortcut, qtyDlg](QAbstractButton *b) {
-        const int idx = b->property("index").toInt();
-        m_tabs->setCurrentIndex(idx);
-        // Ctrl+V 归属当前页：产品录入走图纸粘贴，数量录入走截图粘贴，避免互相抢占
-        pasteShortcut->setEnabled(idx == 0);
-        qtyDlg->setPasteEnabled(idx == 1);
+            this, [this](QAbstractButton *b) {
+        setEntryTab(b->property("index").toInt()); // Ctrl+V 归属一并在 setEntryTab 里同步
     });
 
     rebuildExtFields();
+}
+
+// 切换「产品录入 / 数量录入」子菜单，并同步 Ctrl+V 归属。
+// QButtonGroup::buttonClicked 只在用户点击时发出，程序化 setChecked 不会连带切页，
+// 所以这里必须显式同步 m_tabs，供补充信息 / 修改等跳转入口调用。
+void EntryDialog::setEntryTab(int idx)
+{
+    if (!m_tabs || !m_tabGroup) return;
+    m_tabs->setCurrentIndex(idx);
+    if (QAbstractButton *b = m_tabGroup->button(idx))
+        b->setChecked(true);
+    if (m_pasteShortcut) m_pasteShortcut->setEnabled(idx == 0);
+    if (m_qtyPanel) m_qtyPanel->setPasteEnabled(idx == 1);
+}
+
+void EntryDialog::switchToProductEntry()
+{
+    setEntryTab(0);
 }
 
 EntryDialog::~EntryDialog()
@@ -527,9 +656,16 @@ void EntryDialog::addPickedFiles(const QStringList &paths)
 }
 
 // 仅刷新预览（图片/PDF），不触发识别、不清空已填信息
-void EntryDialog::previewFile(const QString &path)
+void EntryDialog::previewFile(const QString &path, bool fromExisting)
 {
-    if (path.isEmpty()) return;
+    if (!fromExisting) { // 预览本次新增的图纸时，当前项不再是数据库里的记录
+        m_existingDrawingId = -1;
+        m_existingDrawingPath.clear();
+    }
+    if (path.isEmpty()) {
+        updateCurrentDeleteButton();
+        return;
+    }
     m_fileLabel->setText(QFileInfo(path).fileName());
     m_fileLabel->setToolTip(path);
 
@@ -553,72 +689,245 @@ void EntryDialog::previewFile(const QString &path)
         else
             updatePreview();
     }
+    updateCurrentDeleteButton();
 }
 
-// 同步附件列表：单个附件时隐藏列表（保持原界面），多个时逐条显示并选中当前预览项
+// 清空大预览与文件名提示（没有任何可预览的图纸时）
+void EntryDialog::clearFilePreview()
+{
+    m_previewImage = QImage();
+    m_filePreview->setPixmap(QPixmap());
+    m_filePreview->setText(QStringLiteral("点击「选择文件…」、拖入文件，或按 Ctrl+V 粘贴"));
+    m_previewStack->setCurrentWidget(m_filePreview);
+    if (m_pdfDoc) m_pdfDoc->close();
+    m_fileLabel->clear();
+    m_fileLabel->setToolTip(QString());
+    m_existingDrawingId = -1;
+    m_existingDrawingPath.clear();
+    m_pickedFile.clear();
+}
+
+// 缩略图条：左边是产品已挂接的图纸（点 × 真正删除归档文件），
+// 右边是本次选入、尚未保存的附件（点 × 只移出本次录入）
 void EntryDialog::refreshAttachList()
 {
     if (!m_attachList) return;
-    m_attachList->clear();
-    for (const QString &p : m_pickedFiles) {
-        auto *it = new QListWidgetItem(QFileInfo(p).fileName(), m_attachList);
-        it->setData(Qt::UserRole, p);
-        it->setToolTip(p);
-    }
-    m_attachList->setVisible(m_pickedFiles.size() > 1);
+    // setItemWidget 的卡片挂在 viewport 上，clear() 只删条目；
+    // 先摘掉并显式销毁，避免反复刷新时旧卡片残留叠加或泄漏
     for (int i = 0; i < m_attachList->count(); ++i) {
-        if (m_attachList->item(i)->data(Qt::UserRole).toString() == m_pickedFile) {
-            m_attachList->setCurrentRow(i);
+        QListWidgetItem *item = m_attachList->item(i);
+        if (QWidget *w = m_attachList->itemWidget(item)) {
+            m_attachList->removeItemWidget(item);
+            w->hide();
+            w->deleteLater(); // 可能正处在卡片删除按钮的点击栈里，不能直接 delete
+        }
+    }
+    m_attachList->clear();
+
+    int no = 0;
+    for (const Drawing &d : m_existingDrawings) {
+        auto *item = new QListWidgetItem(m_attachList);
+        item->setSizeHint(QSize(94, 92));
+        item->setData(Qt::UserRole, QStringLiteral("e:%1").arg(d.id));
+        const QString tip = QStringLiteral("%1\n%2\n%3\n点击预览，点 × 删除")
+            .arg(QFileInfo(d.filePath).fileName(),
+                 d.dtype == TypeCountersign ? QStringLiteral("会签图") : QStringLiteral("下发图"),
+                 d.drawingDate.isValid() ? d.drawingDate.toString(QStringLiteral("yyyy-MM-dd"))
+                                         : QStringLiteral("未标注日期"));
+        auto *card = new ThumbCard(makeThumbPixmap(d.filePath),
+                                   QStringLiteral("图纸%1").arg(++no), tip, m_attachList);
+        card->setSelected(d.id == m_existingDrawingId);
+        m_attachList->setItemWidget(item, card);
+        const int id = d.id;
+        connect(card->previewButton(), &QPushButton::clicked, this,
+                [this, id] { showExistingDrawing(id); });
+        connect(card->deleteButton(), &QPushButton::clicked, this,
+                [this, id] { onDeleteExistingDrawing(id); });
+    }
+
+    int newNo = 0;
+    for (const QString &p : m_pickedFiles) {
+        auto *item = new QListWidgetItem(m_attachList);
+        item->setSizeHint(QSize(94, 92));
+        item->setData(Qt::UserRole, QStringLiteral("n:%1").arg(p));
+        auto *card = new ThumbCard(makeThumbPixmap(p),
+                                   QStringLiteral("新增%1").arg(++newNo),
+                                   QStringLiteral("%1\n本次录入，尚未保存\n点击预览，点 × 移除").arg(p),
+                                   m_attachList);
+        card->setSelected(m_existingDrawingId < 0 && p == m_pickedFile);
+        m_attachList->setItemWidget(item, card);
+        const QString path = p;
+        connect(card->previewButton(), &QPushButton::clicked, this, [this, path] {
+            m_pickedFile = path;
+            previewFile(path);
+            refreshAttachList();
+        });
+        connect(card->deleteButton(), &QPushButton::clicked, this,
+                [this, path] { onDeletePickedFile(path); });
+    }
+
+    const bool visible = !m_existingDrawings.isEmpty() || !m_pickedFiles.isEmpty();
+    m_thumbTitle->setText(QStringLiteral("图纸文件（共 %1 张 · 点击缩略图预览 · 点 × 删除）")
+                              .arg(no + newNo));
+    m_thumbTitle->setVisible(visible);
+    m_attachList->setVisible(visible);
+    updateCurrentDeleteButton();
+}
+
+// 按当前预览来源刷新大预览右上角的删除键
+void EntryDialog::updateCurrentDeleteButton()
+{
+    if (!m_btnDeleteCurrent) return;
+    const bool existing = m_existingDrawingId >= 0;
+    const bool picked = !m_pickedFile.isEmpty() && m_pickedFiles.contains(m_pickedFile);
+    if (!existing && !picked && m_pastedImage.isNull()) {
+        m_btnDeleteCurrent->hide();
+        return;
+    }
+    m_btnDeleteCurrent->setText(existing ? QStringLiteral("删除当前图纸")
+                                         : QStringLiteral("移除当前图纸"));
+    m_btnDeleteCurrent->show();
+    m_btnDeleteCurrent->raise();
+}
+
+// 预览某张已挂接图纸，并带出这张图纸自己的日期/类型（保存时回写到这一张）
+void EntryDialog::showExistingDrawing(int drawingId)
+{
+    for (const Drawing &d : m_existingDrawings) {
+        if (d.id != drawingId) continue;
+        m_existingDrawingId = d.id;
+        m_existingDrawingPath = d.filePath;
+        m_pickedFile.clear();
+        previewFile(d.filePath, true);
+        if (d.drawingDate.isValid())
+            m_edtDrawingDate->setDate(d.drawingDate);
+        setDrawingType(d.dtype);
+        refreshAttachList();
+        return;
+    }
+}
+
+// 删除一张已挂接图纸：确认后删数据库记录与归档文件（客户端由服务器代删）
+void EntryDialog::onDeleteExistingDrawing(int drawingId)
+{
+    QString fileName;
+    for (const Drawing &d : m_existingDrawings) {
+        if (d.id == drawingId) {
+            fileName = QFileInfo(d.filePath).fileName();
             break;
         }
     }
+    if (!NdMessageBox::question(
+            this, QStringLiteral("删除图纸"),
+            QStringLiteral("确定删除图纸「%1」吗？\n\n将同时删除归档文件与数据库记录，且不可恢复。")
+                .arg(fileName.isEmpty() ? QStringLiteral("（无文件名）") : fileName)))
+        return;
+
+    QString err;
+    if (!DatabaseManager::instance().deleteDrawing(drawingId, &err)) {
+        NdMessageBox::critical(this, QStringLiteral("删除失败"),
+                               err.isEmpty() ? QStringLiteral("图纸删除失败") : err);
+        return;
+    }
+    emit drawingsChanged(); // 立即生效，其它页面不要继续显示已删的图纸
+    for (int i = 0; i < m_existingDrawings.size(); ++i) {
+        if (m_existingDrawings.at(i).id == drawingId) {
+            m_existingDrawings.removeAt(i);
+            break;
+        }
+    }
+    if (m_existingDrawingId == drawingId) {
+        m_existingDrawingId = -1;
+        m_existingDrawingPath.clear();
+        m_pickedFile.clear();
+        if (!m_existingDrawings.isEmpty()) {
+            showExistingDrawing(m_existingDrawings.first().id); // 内部会刷新缩略图条
+            return;
+        }
+        if (!m_pickedFiles.isEmpty()) {
+            m_pickedFile = m_pickedFiles.first();
+            previewFile(m_pickedFile);
+        } else {
+            clearFilePreview();
+        }
+    }
+    refreshAttachList();
 }
 
-// 点击附件：切到该张预览（「识别图纸」也针对这一张）
+// 从本次录入中移除一张尚未保存的新附件（不动磁盘上已归档的图纸）
+void EntryDialog::onDeletePickedFile(const QString &path)
+{
+    m_pickedFiles.removeAll(path);
+    if (m_pickedFile == path) {
+        m_pickedFile.clear();
+        if (!m_pickedFiles.isEmpty()) {
+            m_pickedFile = m_pickedFiles.first();
+            previewFile(m_pickedFile);
+        } else if (!m_existingDrawings.isEmpty()) {
+            showExistingDrawing(m_existingDrawings.first().id);
+            return;
+        } else if (m_pastedImage.isNull()) {
+            clearFilePreview();
+        }
+    }
+    refreshAttachList();
+}
+
+// 大预览右上角删除键：已挂接图纸走真实删除，新增附件/粘贴图只移出本次录入
+void EntryDialog::onDeleteCurrentDrawing()
+{
+    if (m_existingDrawingId >= 0) {
+        onDeleteExistingDrawing(m_existingDrawingId);
+        return;
+    }
+    if (!m_pickedFile.isEmpty() && m_pickedFiles.contains(m_pickedFile)) {
+        onDeletePickedFile(m_pickedFile);
+        return;
+    }
+    if (!m_pastedImage.isNull()) {
+        m_pastedImage = QImage();
+        m_pastedTempPath.clear();
+        clearFilePreview();
+        refreshAttachList();
+    }
+}
+
+// 点击缩略图条目：切换预览（卡片按钮不可用时的兜底）
 void EntryDialog::onAttachClicked(QListWidgetItem *item)
 {
     if (!item) return;
-    const QString p = item->data(Qt::UserRole).toString();
-    if (p.isEmpty() || p == m_pickedFile) return;
-    m_pickedFile = p;
-    previewFile(p);
+    const QString key = item->data(Qt::UserRole).toString();
+    if (key.startsWith(QLatin1String("e:"))) {
+        showExistingDrawing(key.mid(2).toInt());
+    } else if (key.startsWith(QLatin1String("n:"))) {
+        const QString p = key.mid(2);
+        m_pickedFile = p;
+        previewFile(p);
+        refreshAttachList();
+    }
 }
 
-// 附件右键：预览 / 从本次保存中移除
+// 缩略图右键：预览 / 删除（与卡片上的按钮等价）
 void EntryDialog::onAttachContextMenu(const QPoint &pos)
 {
     QListWidgetItem *item = m_attachList->itemAt(pos);
     if (!item) return;
-    const QString p = item->data(Qt::UserRole).toString();
+    const QString key = item->data(Qt::UserRole).toString();
+    const bool existing = key.startsWith(QLatin1String("e:"));
     RoundedMenu menu(this);
     QAction *aPreview = menu.addAction(QStringLiteral("预览此图纸"));
-    QAction *aRemove = menu.addAction(QStringLiteral("从附件中移除"));
+    QAction *aDelete = menu.addAction(existing ? QStringLiteral("删除此图纸")
+                                               : QStringLiteral("从本次录入中移除"));
     QAction *chosen = menu.exec(m_attachList->viewport()->mapToGlobal(pos));
     if (!chosen) return;
-
     if (chosen == aPreview) {
-        m_pickedFile = p;
-        previewFile(p);
-        refreshAttachList();
+        onAttachClicked(item);
         return;
     }
-    if (chosen == aRemove) {
-        m_pickedFiles.removeAll(p);
-        if (m_pickedFiles.isEmpty()) {
-            m_pickedFile.clear();
-            m_previewImage = QImage();
-            m_filePreview->setPixmap(QPixmap());
-            m_filePreview->setText(QStringLiteral("点击「选择文件…」、拖入文件，或按 Ctrl+V 粘贴"));
-            m_previewStack->setCurrentWidget(m_filePreview);
-            if (m_pdfDoc) m_pdfDoc->close();
-            m_fileLabel->clear();
-            m_fileLabel->setToolTip(QString());
-        } else if (p == m_pickedFile) {
-            m_pickedFile = m_pickedFiles.first();
-            previewFile(m_pickedFile);
-        }
-        refreshAttachList();
-    }
+    if (existing)
+        onDeleteExistingDrawing(key.mid(2).toInt());
+    else
+        onDeletePickedFile(key.mid(2));
 }
 
 // 预览图按预览区可用尺寸等比缩放：只显示右下角标题栏区域（约整图 1/4），
@@ -707,19 +1016,14 @@ void EntryDialog::resetForm()
     m_editingId = -1;
     m_pickedFile.clear();
     m_pickedFiles.clear(); // 清空多附件
+    m_existingDrawings.clear(); // 清掉上一个产品挂接的全部图纸
     m_existingDrawingPath.clear();
     m_existingDrawingId = -1;
     m_pastedImage = QImage();
     m_pastedTempPath.clear();
     clearHeifTemps();
-    m_fileLabel->clear();
-    m_fileLabel->setToolTip(QString());
-    m_previewImage = QImage();
-    m_filePreview->setPixmap(QPixmap());
-    m_filePreview->setText(QStringLiteral("点击「选择文件…」、拖入文件，或按 Ctrl+V 粘贴"));
-    m_previewStack->setCurrentWidget(m_filePreview);
-    if (m_pdfDoc) m_pdfDoc->close(); // 卸载上一张 PDF，回到图片预览页
-    refreshAttachList();             // 附件列表随之为空并隐藏
+    clearFilePreview();   // 预览区、文件名、删除键一并复位
+    refreshAttachList();  // 缩略图条随之为空并隐藏
 
     m_cmbCategory->setCurrentIndex(0);
     clearSupplement();
@@ -798,6 +1102,8 @@ void EntryDialog::pasteFromClipboard()
             m_pastedTempPath.clear();
             m_pickedFile.clear();
             m_pickedFiles.clear(); // 粘贴图片替换掉之前的所有附件
+            m_existingDrawingId = -1; // 当前预览改为内存图片，不再指向已挂接图纸
+            m_existingDrawingPath.clear();
             refreshAttachList();
             m_fileLabel->setText(QStringLiteral("粘贴的图片"));
             m_fileLabel->setToolTip(QStringLiteral("保存时将写入图纸库"));
@@ -1348,6 +1654,7 @@ QStringList EntryDialog::applyOcrText(const QString &text, const QString &fileNa
 void EntryDialog::loadProduct(int id)
 {
     resetForm();
+    switchToProductEntry(); // 补充信息 / 修改一律进「产品录入」，不沿用上次的数量录入子菜单
     const Product p = DatabaseManager::instance().productById(id);
     if (p.id < 0) return;
     m_editingId = id;
@@ -1368,7 +1675,6 @@ void EntryDialog::loadProduct(int id)
     m_edtName->setText(p.name);
     // 硬件/软件版本号现作为 ext 字段，由下方 m_extEdits 循环从 p.extFields 回填
     m_edtRemark->setText(p.remark);
-    m_edtCreator->setText(p.creator);
     m_edtQty->setText(QString::number(p.qty));
     m_edtMinQty->setText(QString::number(p.minQty));
     m_edtMaxQty->setText(QString::number(p.maxQty));
@@ -1378,39 +1684,19 @@ void EntryDialog::loadProduct(int id)
             pair.second->setText(it.value());
     }
 
-    // 录入时间：编辑已有记录时显示原录入时间
-    m_edtCreated->setText(p.createdAt.toString(QStringLiteral("yyyy-MM-dd HH:mm")));
+    // 「补充信息 / 修改」按本次操作重新登记：录入时间取当前时间，录入人取当前登录账号。
+    // 两个字段仍只读，不再回填数据库里的旧值
+    m_edtCreated->setText(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm")));
+    m_edtCreator->setText(m_currentUser.isEmpty() ? p.creator : m_currentUser);
 
-    // 已有图纸：仅作预览（不算新附件），同时带出图纸时间和图纸类型
-    const QList<Drawing> ds = DatabaseManager::instance().drawingsOf(id);
-    if (!ds.isEmpty()) {
-        const Drawing d = ds.first();
-        m_existingDrawingPath = d.filePath; // 记住原图纸：点「识别图纸」时用它，保存时不重复挂接
-        m_existingDrawingId = d.id;         // 记住记录 id：编辑后回写日期/类型用
-        m_fileLabel->setText(QFileInfo(d.filePath).fileName());
-        m_fileLabel->setToolTip(d.filePath);
-        if (d.format.compare(QStringLiteral("pdf"), Qt::CaseInsensitive) == 0) {
-            m_previewImage = QImage();
-            m_filePreview->setPixmap(QPixmap());
-            m_filePreview->clear();
-            if (m_pdfDoc->load(d.filePath) == QPdfDocument::Error::None
-                && m_pdfDoc->pageCount() > 0) {
-                m_previewStack->setCurrentWidget(m_pdfView);
-            } else {
-                m_previewStack->setCurrentWidget(m_filePreview);
-                m_filePreview->setText(QStringLiteral("PDF 加载失败"));
-            }
-        } else {
-            const QImage img = loadImageOriented(d.filePath);
-            if (!img.isNull()) {
-                m_previewImage = img;
-                // 延后一拍再缩放：刚切页进来时布局未完成，直接取预览区尺寸会偏小
-                QTimer::singleShot(0, this, [this] { updatePreview(); });
-            }
-        }
-        if (d.drawingDate.isValid())
-            m_edtDrawingDate->setDate(d.drawingDate);
-        setDrawingType(d.dtype);
+    // 已挂接图纸：全部生成缩略图，逐张可预览、可删除；默认展示第一张并带出其日期/类型
+    m_existingDrawings = DatabaseManager::instance().drawingsOf(id);
+    if (!m_existingDrawings.isEmpty()) {
+        showExistingDrawing(m_existingDrawings.first().id); // 内部会刷新缩略图条
+        // 刚切页进来时布局尚未完成，延后一拍再按实际尺寸重绘预览
+        QTimer::singleShot(0, this, [this] { updatePreview(); });
+    } else {
+        refreshAttachList();
     }
 }
 
@@ -1430,6 +1716,7 @@ void EntryDialog::onSave()
     // 硬件/软件版本号改为控制器专属特有字段，随 m_extEdits 一同写入 product_ext（不再写通用列）
     p.remark = m_edtRemark->text().trimmed();
     p.creator = m_currentUser.isEmpty() ? m_edtCreator->text().trimmed() : m_currentUser;
+    p.createdAt = QDateTime::currentDateTime(); // 本次操作时间，保存后刷新「录入时间」
     p.qty = m_edtQty->text().trimmed().toInt();
     p.minQty = m_edtMinQty->text().trimmed().toInt();
     p.maxQty = m_edtMaxQty->text().trimmed().toInt();

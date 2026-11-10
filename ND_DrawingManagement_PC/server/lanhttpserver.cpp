@@ -24,12 +24,31 @@
 #include <QFile>
 #include <QIODevice>
 #include <QDate>
+#include <QDateTime>
 #include <QMap>
 
 // 同步数据格式版本：手机端据此判断是否需整体重建本地库
 static const int kSyncSchemaVersion = 1;
 
 namespace {
+// 只在一次客户端写请求期间切换操作人，函数返回（含所有 return 分支）时自动还原。
+// 否则最后一个客户端账号会常驻 DatabaseManager 单例，把服务器本机登录用户
+// 之后的操作日志也记成那个客户端账号。
+class OperatorScope
+{
+public:
+    OperatorScope(DatabaseManager &db, const QString &who)
+        : m_db(db), m_prev(db.currentOperatorRaw())
+    {
+        m_db.setCurrentOperator(who);
+    }
+    ~OperatorScope() { m_db.setCurrentOperator(m_prev); }
+
+private:
+    DatabaseManager &m_db;
+    QString m_prev;
+};
+
 // 客户端接口统一返回 {"ok":true/false, ...}，便于客户端按 ok 判断而不依赖 HTTP 状态码
 QHttpServerResponse jsonOk(const QJsonObject &extra = QJsonObject())
 {
@@ -96,6 +115,9 @@ Product productFromJson(const QJsonObject &o)
     p.swVersion = o.value(QStringLiteral("sw_version")).toString();
     p.remark = o.value(QStringLiteral("remark")).toString();
     p.creator = o.value(QStringLiteral("creator")).toString();
+    // 客户端「补充信息 / 修改」带的本次录入时间，服务端需接收才能刷新 created_at
+    p.createdAt = QDateTime::fromString(
+        o.value(QStringLiteral("created_at")).toString(), Qt::ISODate);
     p.qty = o.value(QStringLiteral("qty")).toInt();
     p.minQty = o.value(QStringLiteral("min_qty")).toInt();
     p.maxQty = o.value(QStringLiteral("max_qty")).toInt();
@@ -482,6 +504,35 @@ QHttpServerResponse LanHttpServer::handleData(const QHttpServerRequest &req)
         extra[QStringLiteral("total")] = total;
         return jsonOk(extra);
     }
+    // 工具 → 芯片查询：只读查询（未登录客户端也能查），写操作在 handleWrite 里带 token
+    if (action == QLatin1String("chip_query")) {
+        const QString what = b.value(QStringLiteral("what")).toString();
+        if (what == QLatin1String("hardwares")) {
+            QJsonArray arr;
+            for (const QString &s : db.chipHardwares())
+                arr.append(s);
+            extra[QStringLiteral("hardwares")] = arr;
+            return jsonOk(extra);
+        }
+        if (what == QLatin1String("models")) {
+            QJsonArray arr;
+            for (const ChipItem &c : db.chipModelDict())
+                arr.append(c.toJson());
+            extra[QStringLiteral("items")] = arr;
+            return jsonOk(extra);
+        }
+        int total = 0;
+        const QList<ChipItem> list = db.chipSearch(
+            b.value(QStringLiteral("mode")).toString(),
+            b.value(QStringLiteral("keyword")).toString(),
+            b.value(QStringLiteral("limit")).toInt(1000), &total);
+        QJsonArray arr;
+        for (const ChipItem &c : list)
+            arr.append(c.toJson());
+        extra[QStringLiteral("items")] = arr;
+        extra[QStringLiteral("total")] = total;
+        return jsonOk(extra);
+    }
     if (action == QLatin1String("list_users")) {
         QJsonArray arr;
         const auto users = db.listUsers();
@@ -532,7 +583,8 @@ QHttpServerResponse LanHttpServer::handleWrite(const QHttpServerRequest &req)
     const QString who = accountFromToken(b.value(QStringLiteral("token")).toString());
     recordClient(req.remoteAddress().toString(), who, action);
     DatabaseManager &db = DatabaseManager::instance();
-    db.setCurrentOperator(who); // 客户端写操作按登录账号记入用户日志
+    // 仅本次请求按客户端登录账号记日志；返回时自动还原为服务器本机登录账号
+    const OperatorScope opScope(db, who);
     QString err;
     appendLog(QStringLiteral("客户端修改：%1（IP=%2）")
                   .arg(action, req.remoteAddress().toString()));
@@ -662,12 +714,35 @@ QHttpServerResponse LanHttpServer::handleWrite(const QHttpServerRequest &req)
             return jsonErr(err.isEmpty() ? QStringLiteral("删除库存档案失败") : err);
         return jsonOk();
     }
+    // 工具 → 芯片查询：客户端写操作，validToken 已在 handleWrite 入口统一校验
+    if (action == QLatin1String("chip_write")) {
+        const QString op = b.value(QStringLiteral("op")).toString();
+        if (op == QLatin1String("save")) {
+            ChipItem c = ChipItem::fromJson(b);
+            if (!db.chipSave(&c, &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("芯片信息保存失败") : err);
+            QJsonObject res;
+            res[QStringLiteral("id")] = c.id;
+            return jsonOk(res);
+        }
+        if (op == QLatin1String("delete")) {
+            if (!db.chipDelete(b.value(QStringLiteral("id")).toInt(-1), &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("芯片信息删除失败") : err);
+            return jsonOk();
+        }
+        return jsonErr(QStringLiteral("未知的芯片操作"));
+    }
     if (action == QLatin1String("update_drawing_meta")) {
         const QDate date = QDate::fromString(b.value(QStringLiteral("drawing_date")).toString(),
                                              Qt::ISODate);
         if (!db.updateDrawingMeta(b.value(QStringLiteral("id")).toInt(-1),
                                   b.value(QStringLiteral("dtype")).toInt(0), date, &err))
             return jsonErr(err.isEmpty() ? QStringLiteral("图纸信息更新失败") : err);
+        return jsonOk();
+    }
+    if (action == QLatin1String("delete_drawing")) {
+        if (!db.deleteDrawing(b.value(QStringLiteral("id")).toInt(-1), &err))
+            return jsonErr(err.isEmpty() ? QStringLiteral("图纸删除失败") : err);
         return jsonOk();
     }
     if (action == QLatin1String("update_change_log")) {

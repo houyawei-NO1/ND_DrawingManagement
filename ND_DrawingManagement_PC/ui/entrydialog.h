@@ -29,6 +29,8 @@ class QPdfDocument;
 class QPdfView;
 class QListWidget;
 class QListWidgetItem;
+class QShortcut;
+class MaterialCodeDialog;
 
 // 图纸录入页：选文件 → 填信息（特有字段随分类动态生成）→ 保存
 class EntryDialog : public QWidget
@@ -41,10 +43,12 @@ public:
     void resetForm();   // 清空表单，准备下一次录入
     void loadProduct(int id); // 载入已有产品进入编辑模式（管理页跳转）
     void setCurrentUser(const QString &name); // 设置当前登录用户（录入人自动填）
+    void switchToProductEntry(); // 切到「产品录入」子菜单（补充信息 / 修改入口）
 
 signals:
     void saved();       // 保存成功
     void cancelled();   // 用户取消
+    void drawingsChanged(); // 编辑页删除了已挂接图纸，主界面/管理页需同步刷新
 
 private slots:
     void onCategoryChanged(int index);
@@ -61,14 +65,22 @@ protected:
     void showEvent(QShowEvent *event) override;
 
 private:
+    void setEntryTab(int idx);   // 切换「产品录入 / 数量录入」并同步 Ctrl+V 归属
     void rebuildExtFields();
     void clearSupplement();                  // 换图纸时清空上一张的补充信息
     void setPickedFile(const QString &path); // 设置图纸文件并刷新预览
     void addPickedFiles(const QStringList &paths); // 追加多张图纸（首个负责预览+识别）
-    void previewFile(const QString &path);         // 仅刷新预览，不触发识别
-    void refreshAttachList();                      // 同步附件列表显示
-    void onAttachClicked(QListWidgetItem *item);   // 点击附件：切换预览
-    void onAttachContextMenu(const QPoint &pos);   // 附件右键：预览/移除
+    // fromExisting=true 表示预览的是已挂接图纸，不重置 m_existingDrawingId
+    void previewFile(const QString &path, bool fromExisting = false);
+    void refreshAttachList();    // 同步缩略图条：已挂接图纸 + 本次新增附件，每张都能预览/删除
+    void clearFilePreview();     // 清空大预览与文件名提示
+    void showExistingDrawing(int drawingId);      // 预览某张已挂接图纸，并带出其日期/类型
+    void onDeleteExistingDrawing(int drawingId);  // 删除某张已挂接图纸（记录 + 归档文件）
+    void onDeletePickedFile(const QString &path); // 从本次新增附件中移除
+    void onDeleteCurrentDrawing();                // 大预览区右上角删除键
+    void updateCurrentDeleteButton();             // 按当前预览来源刷新删除键文字/可见性
+    void onAttachClicked(QListWidgetItem *item);  // 点击缩略图条目：切换预览
+    void onAttachContextMenu(const QPoint &pos);  // 缩略图右键：预览/删除
     void updatePreview();                    // 按当前预览区尺寸等比缩放显示图纸
     void searchOcrText(const QString &text);  // OCR 原文搜索：高亮并定位匹配
     QString ensureImageFile();               // 粘贴的图片在保存/识别时才落盘，返回文件路径
@@ -103,7 +115,9 @@ private:
     QStackedWidget *m_previewStack = nullptr;// 图片 QLabel 与 PDF QPdfView 切换
     QPdfDocument *m_pdfDoc = nullptr;        // PDF 预览文档
     QPdfView *m_pdfView = nullptr;           // PDF 预览视图
-    QListWidget *m_attachList = nullptr;     // 已附加图纸列表（同型号可多张：pdf + 图片）
+    QPushButton *m_btnDeleteCurrent = nullptr; // 大预览右上角：删除/移除当前图纸
+    QLabel *m_thumbTitle = nullptr;          // 缩略图条标题（共几张、如何删除）
+    QListWidget *m_attachList = nullptr;     // 缩略图条：已挂接图纸 + 本次新增附件（每张带删除键）
     QImage m_previewImage;                   // 原始图纸图像，窗口变化时重新缩放
     QPushButton *m_btnOcr = nullptr;         // 识别图纸
 
@@ -123,8 +137,9 @@ private:
 
     QString m_pickedFile;    // 当前预览/识别的那张
     QStringList m_pickedFiles; // 全部待保存图纸（多附件，含 m_pickedFile）
-    QString m_existingDrawingPath; // 编辑模式：产品已挂接的图纸路径（仅预览/识别，不算新附件）
-    int m_existingDrawingId = -1;  // 编辑模式：当前展示/可回写的图纸记录 id
+    QString m_existingDrawingPath; // 当前预览的已挂接图纸路径（仅预览/识别，不算新附件）
+    int m_existingDrawingId = -1;  // 当前预览/可回写的已挂接图纸记录 id，-1 表示预览的是新附件
+    QList<Drawing> m_existingDrawings; // 编辑模式：产品已挂接的全部图纸（缩略图条数据源）
     QImage m_pastedImage;    // 粘贴的图片先放内存，避免大图编码卡顿
     QString m_pastedTempPath;
     QStringList m_heifTemps;   // HEIC 解码转存的临时 JPG（图纸落盘后清理）
@@ -133,6 +148,8 @@ private:
 
     QStackedWidget *m_tabs = nullptr;   // 产品录入 / 数量录入 两个页
     QButtonGroup *m_tabGroup = nullptr; // 顶部 Tab 按钮组
+    QShortcut *m_pasteShortcut = nullptr;      // 产品录入页的 Ctrl+V
+    MaterialCodeDialog *m_qtyPanel = nullptr;  // 数量录入页内嵌面板（切页时开关其 Ctrl+V）
 };
 
 #endif // ENTRYDIALOG_H

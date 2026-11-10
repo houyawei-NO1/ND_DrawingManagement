@@ -1,6 +1,7 @@
 #include "materialcodedialog.h"
 #include "db/databasemanager.h"
 #include "ndmessagebox.h"
+#include "savingoverlay.h"
 
 #include <QGridLayout>
 #include <QVBoxLayout>
@@ -39,7 +40,7 @@
 #include <QShortcut>
 #include <QKeySequence>
 #include <QUrl>
-#include <QSet>
+#include <QHash>
 #include <QTableWidgetItem>
 #include <algorithm>
 
@@ -288,26 +289,73 @@ static bool isPrefixWithinOneChar(const QString &shortKey, const QString &longKe
     return false;
 }
 
-// 物料编码反查只适用于「截图不全、型号只显示一半」的情况：
-// 归一化后两者必须构成前缀关系（容忍 1 个字符的 OCR 误差）。
-// 像 MV1004-8C-48-0530 ↔ HB2204-1-48-022 这种完全不同的型号一律拒绝，
-// 否则会把数量记到别的产品上。
-static bool isModelRelated(const QString &ocrModel, const QString &dbModel)
+// 归一化型号串的编辑距离（替换 / 插入 / 删除各记 1 次）。
+// 型号串一般不超过 30 字符，用滚动数组即可；异常长串按「不相关」处理。
+static int modelEditDistance(const QString &a, const QString &b)
+{
+    constexpr int kUnrelated = 1000000;
+    const int n = a.size(), m = b.size();
+    if (n > 64 || m > 64)
+        return kUnrelated;
+    QList<int> prev(m + 1, 0), cur(m + 1, 0);
+    for (int j = 0; j <= m; ++j) prev[j] = j;
+    for (int i = 1; i <= n; ++i) {
+        cur[0] = i;
+        for (int j = 1; j <= m; ++j) {
+            const int cost = (a.at(i - 1) == b.at(j - 1)) ? 0 : 1;
+            cur[j] = qMin(qMin(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
+        }
+        prev.swap(cur);
+    }
+    return prev.at(m);
+}
+
+// 型号里的数字骨架：OCR 容易把字母读错（V/Y、多读一个 E），数字段相对稳定。
+// 用它兜底，防止把数量记到数字段完全不同的产品上。
+static QString modelDigits(const QString &key)
+{
+    QString out;
+    for (const QChar ch : key)
+        if (ch.isDigit()) out.append(ch);
+    return out;
+}
+
+// 判断 OCR 型号与库中型号是否为「同一型号的不同读法」。
+// 返回 0~2 的差异分数（越小越可信），-1 表示差异过大、不予采用。
+// 覆盖三类误差：
+//   1) 截图截断，只显示一半型号 → 前缀关系，分数 0；
+//   2) 多读 / 漏读 1~2 个字符，如 MEF704-6E-48-028 ↔ MF704-6E-48-028；
+//   3) 认错 1~2 个字母，如 MV1204-9C-48-0530 ↔ MY1204-9C-48-0530。
+// 编码精确命中是主要依据，这里只需排除「编码与型号张冠李戴」的情况。
+static int modelRelationDistance(const QString &ocrModel, const QString &dbModel)
 {
     const QString a = normalizeModelKey(ocrModel);
     const QString b = normalizeModelKey(dbModel);
     if (a.size() < 5 || b.size() < 5)
-        return false; // 太短的片段不足以判定，避免误命中
+        return -1; // 太短的片段不足以判定，避免误命中
     const bool aShorter = a.size() <= b.size();
     const QString &shorter = aShorter ? a : b;
     const QString &longer  = aShorter ? b : a;
-    return isPrefixWithinOneChar(shorter, longer);
+    if (isPrefixWithinOneChar(shorter, longer))
+        return 0; // 截图截断 / 型号只显示一半，长度差可以任意大
+
+    // 整体形状接近才按「读错字符」处理；长度差过大仍判不相关
+    if (qAbs(a.size() - b.size()) > 2)
+        return -1;
+    const int dist = modelEditDistance(a, b);
+    if (dist > 2)
+        return -1;
+    // 数字骨架最多错 1 位：型号的数字段是区分不同产品的主要特征
+    if (modelEditDistance(modelDigits(a), modelDigits(b)) > 1)
+        return -1;
+    return dist;
 }
 
-// 截图被截断时型号读不全，但物料编码是独立的一列数字，通常完整。
-// 用识别到的编码在库里精确反查 material_code，并要求型号相关（前缀关系）；
-// 同一编码对应多个产品时再用型号相关性消歧，仍不唯一就不猜。
-// 因型号差异过大被拒绝时，rejectedModel 带回库中型号供界面提示。
+// 截图被截断或 OCR 读错字符时型号直接匹配不上，但物料编码是独立的一列数字，通常完整可靠。
+// 用识别到的编码在库里精确反查 material_code，再用型号差异分数确认没有张冠李戴：
+//  - 唯一命中且型号差异小（前缀截断 / 多读漏读 / 认错 1~2 个字母）→ 采用库中型号；
+//  - 同一编码挂了多个产品 → 取差异最小的，且必须唯一最小，否则不猜；
+//  - 型号差异过大 → 拒绝，rejectedModel 带回库中型号供界面提示。
 static int lookupProductByCode(const QString &code, const QString &model,
                                QString *matchedModel, QString *rejectedModel = nullptr)
 {
@@ -322,25 +370,32 @@ static int lookupProductByCode(const QString &code, const QString &model,
     }
     if (hits.isEmpty())
         return -1;
+
     const QString m = model.trimmed();
-    if (hits.size() > 1 && !m.isEmpty()) {
-        QList<Product> narrowed;
+    int bestDist = 1000000;
+    QList<Product> best;
+    if (!m.isEmpty()) {
         for (const Product &p : hits) {
-            if (isModelRelated(m, p.model))
-                narrowed << p;
+            const int d = modelRelationDistance(m, p.model);
+            if (d < 0)
+                continue;
+            if (d < bestDist) {
+                bestDist = d;
+                best.clear();
+                best << p;
+            } else if (d == bestDist) {
+                best << p;
+            }
         }
-        if (!narrowed.isEmpty())
-            hits = narrowed;
     }
-    if (hits.size() != 1)
-        return -1;
-    const Product &p = hits.first();
-    if (!isModelRelated(m, p.model)) {
-        if (rejectedModel) *rejectedModel = p.model;
+    if (best.size() != 1) {
+        // 唯一命中却型号完全不相关时，把库中型号带回，界面提示「差异过大」
+        if (hits.size() == 1 && rejectedModel)
+            *rejectedModel = hits.first().model;
         return -1;
     }
-    if (matchedModel) *matchedModel = p.model;
-    return p.id;
+    if (matchedModel) *matchedModel = best.first().model;
+    return best.first().id;
 }
 
 static bool isImageFile(const QString &path)
@@ -935,19 +990,96 @@ int MaterialCodeDialog::parseAndAppend(const QString &text)
     return unpaired;
 }
 
-void MaterialCodeDialog::rebuildTable()
+// 多张截图是同一份表格的连续页，页与页之间会有重叠：同一行在两张图里各被识别一次
+// （表格序号相同、数量也相同）。这类重复只保留一行，数量不能累加；
+// 序号不同的才是原表格里同一物料的另外一行，数量才需要累加（如 225 + 11）。
+// parseAndAppend 只做单张图内部的合并，这里在整个结果集上按物料编码再合并一次。
+void MaterialCodeDialog::mergeDuplicateRows(bool logToRaw)
 {
-    // 按「编码+型号」去重，避免多张图重复识别同一条
     QList<Row> uniq;
-    QSet<QString> seen;
+    QHash<QString, int> pos; // 合并键 → uniq 中的行号
+    QStringList mergeNotes, dupNotes;
     for (const Row &r : m_rows) {
-        const QString key = r.code + QLatin1Char('|') + r.model;
-        if (seen.contains(key))
+        const QString code = r.code.trimmed();
+        // 同一编码在不同页的型号写法可能因 (U)、截图截断、OCR 差异而不同，仍属同一物料
+        const bool byCode = (m_mode == Quantity && !code.isEmpty());
+        const QString key = byCode ? QStringLiteral("C:") + code
+                                   : code + QLatin1Char('|') + r.model;
+        const auto it = pos.constFind(key);
+        if (it == pos.constEnd()) {
+            pos.insert(key, uniq.size());
+            uniq << r;
             continue;
-        seen.insert(key);
-        uniq << r;
+        }
+        Row &first = uniq[*it];
+        if (!byCode)
+            continue; // 物料编码模式 / 编码缺失：只去重，不改动数量
+        if (first.model.compare(r.model, Qt::CaseInsensitive) != 0
+            && lookupProductId(first.model, nullptr) < 0
+            && lookupProductId(r.model, nullptr) >= 0) {
+            // 首行型号在库中匹配不上、后页型号能匹配上时，采用后页型号，
+            // 避免数量合并到一行却因型号写法问题录不到产品上
+            first.model = r.model;
+            first.incomplete = r.incomplete;
+        }
+
+        // 表格序号唯一：序号相同 = 相邻截图重叠区里的同一行，去重不累加。
+        // 序号漏识别时，型号与数量都完全相同也按同一行重复处理（日志标注供核对）。
+        const bool sameSeq = first.seq > 0 && r.seq > 0 && first.seq == r.seq;
+        const bool sameWithoutSeq = (first.seq <= 0 || r.seq <= 0)
+            && first.model.compare(r.model, Qt::CaseInsensitive) == 0
+            && first.qty > 0 && first.qty == r.qty;
+        if (sameSeq || sameWithoutSeq) {
+            const QString seqText = first.seq > 0 ? QString::number(first.seq)
+                                   : (r.seq > 0 ? QString::number(r.seq)
+                                                : QStringLiteral("未识别"));
+            const int keep = first.qty > 0 ? first.qty : r.qty;
+            const QString tip = (r.qty > 0 && first.qty > 0 && r.qty != first.qty)
+                ? QStringLiteral("（重复行识别为 %1，已忽略，请核对）").arg(r.qty)
+                : QStringLiteral("（重复行已忽略）");
+            dupNotes << QStringLiteral("  编码 %1：序号 %2，数量 %3%4")
+                          .arg(code).arg(seqText).arg(keep).arg(tip);
+            if (first.qty <= 0 && r.qty > 0)
+                first.qty = r.qty; // 首行数量漏识别：用重复行补上，不累加
+            if (first.seq <= 0 && r.seq > 0)
+                first.seq = r.seq;
+            continue;
+        }
+
+        const int add = r.qty;
+        const int before = first.qty;
+        if (add > 0) {
+            first.qty = before + add;
+            mergeNotes << QStringLiteral("  编码 %1：%2 + %3 = %4")
+                           .arg(code).arg(before).arg(add).arg(first.qty);
+        } else {
+            mergeNotes << QStringLiteral("  编码 %1：重复行未识别到数量，保持 %2")
+                           .arg(code).arg(before);
+        }
+        if (first.seq <= 0 && r.seq > 0)
+            first.seq = r.seq;
     }
     m_rows = uniq;
+    if (logToRaw && m_ocrRaw) {
+        if (!dupNotes.isEmpty()) {
+            m_ocrRaw->appendPlainText(QStringLiteral("  【跨页去重】相邻截图重叠识别到同一行，数量不累加："));
+            for (const QString &s : dupNotes)
+                m_ocrRaw->appendPlainText(s);
+        }
+        if (!mergeNotes.isEmpty()) {
+            m_ocrRaw->appendPlainText(QStringLiteral("  【跨页合并】同一物料编码在表格的不同行出现，数量已累加："));
+            for (const QString &s : mergeNotes)
+                m_ocrRaw->appendPlainText(s);
+        }
+        if (!dupNotes.isEmpty() || !mergeNotes.isEmpty())
+            m_ocrRaw->appendPlainText(QString());
+    }
+}
+
+void MaterialCodeDialog::rebuildTable()
+{
+    // 合并所有图片里的重复行（同一行去重、不同行数量累加），再生成表格
+    mergeDuplicateRows(false);
 
     DatabaseManager &db = DatabaseManager::instance();
     m_table->setRowCount(m_rows.size());
@@ -956,8 +1088,9 @@ void MaterialCodeDialog::rebuildTable()
         // (U) 可能只是表格后缀、库里登记的是不带括号的型号，也可能库里带 (U)
         QString matchedModel;
         r.productId = lookupProductId(r.model, &matchedModel);
-        // 型号被截图截断时匹配不上，改用识别到的物料编码反查（编码是独立的一列数字，通常完整）；
-        // 反查还要求型号相关，否则不采用，避免把数量记到别的产品上
+        // 型号被截图截断或 OCR 读错字符时匹配不上，改用物料编码反查
+        // （编码是独立的一列数字，通常完整可靠）；反查允许 1~2 个字符的型号误差，
+        // 差异过大仍不采用，避免把数量记到别的产品上
         r.byCode = false;
         QString rejectedModel;
         if (r.productId < 0 && !r.code.trimmed().isEmpty()) {
@@ -975,6 +1108,9 @@ void MaterialCodeDialog::rebuildTable()
         QString info;
         const QString modelText = (!matchedModel.isEmpty() && matchedModel != r.model)
             ? r.model + QStringLiteral(" → ") + matchedModel : r.model;
+        // 按编码反查且识别型号与库中型号不是同一个写法 → OCR 型号已被纠正
+        const bool correctedModel = r.byCode && !matchedModel.isEmpty()
+            && normalizeModelKey(matchedModel) != normalizeModelKey(r.model);
 
         if (m_mode == Quantity) {
             // 数量状态
@@ -1027,8 +1163,10 @@ void MaterialCodeDialog::rebuildTable()
                     codeStatus = QStringLiteral("截图为空");
                     codeColor = QColor(0xE0, 0xA6, 0x4C);
                 } else if (cur.compare(r.code, Qt::CaseInsensitive) == 0) {
-                    codeStatus = r.byCode ? QStringLiteral("编码一致（按编码匹配）")
-                                          : QStringLiteral("编码一致");
+                    codeStatus = r.byCode
+                        ? (correctedModel ? QStringLiteral("型号已纠错（按编码匹配）")
+                                          : QStringLiteral("编码一致（按编码匹配）"))
+                        : QStringLiteral("编码一致");
                     codeColor = QColor(0x43, 0xCF, 0x7C);
                 } else if (isOcrCodeLengthError(r.code, cur)) {
                     codeStatus = QStringLiteral("编码识别错误");
@@ -1049,8 +1187,12 @@ void MaterialCodeDialog::rebuildTable()
                                                         : QStringLiteral("—"));
             auto *c0 = new QTableWidgetItem(modelText);
             if (r.byCode)
-                c0->setToolTip(QStringLiteral("型号未匹配，按物料编码「%1」反查到库中型号「%2」")
-                                   .arg(r.code.trimmed(), matchedModel));
+                c0->setToolTip(correctedModel
+                    ? QStringLiteral("识别型号「%1」与库中型号「%2」仅差少量字符；"
+                                     "按物料编码「%3」反查并采用库中型号，数量将录入该产品")
+                          .arg(r.model, matchedModel, r.code.trimmed())
+                    : QStringLiteral("型号未匹配，按物料编码「%1」反查到库中型号「%2」")
+                          .arg(r.code.trimmed(), matchedModel));
             else if (modelText != r.model)
                 c0->setToolTip(QStringLiteral("按库中型号「%1」匹配").arg(matchedModel));
             auto *c1 = new QTableWidgetItem(QString::number(r.qty));
@@ -1100,8 +1242,10 @@ void MaterialCodeDialog::rebuildTable()
                 status = QStringLiteral("待补充");
                 statusColor = QColor(0x43, 0xCF, 0x7C);
             } else if (cur.compare(r.code, Qt::CaseInsensitive) == 0) {
-                status = r.byCode ? QStringLiteral("编码一致（按编码匹配）")
-                                  : QStringLiteral("编码一致");
+                status = r.byCode
+                    ? (correctedModel ? QStringLiteral("型号已纠错（按编码匹配）")
+                                      : QStringLiteral("编码一致（按编码匹配）"))
+                    : QStringLiteral("编码一致");
                 statusColor = QColor(0x43, 0xCF, 0x7C);
             } else if (isOcrCodeLengthError(r.code, cur)) {
                 status = QStringLiteral("编码识别错误");
@@ -1124,8 +1268,12 @@ void MaterialCodeDialog::rebuildTable()
         auto *c0 = new QTableWidgetItem(r.code);
         auto *c1 = new QTableWidgetItem(modelText);
         if (r.byCode)
-            c1->setToolTip(QStringLiteral("型号未匹配，按物料编码「%1」反查到库中型号「%2」")
-                               .arg(r.code.trimmed(), matchedModel));
+            c1->setToolTip(correctedModel
+                ? QStringLiteral("识别型号「%1」与库中型号「%2」仅差少量字符；"
+                                 "按物料编码「%3」反查并采用库中型号")
+                      .arg(r.model, matchedModel, r.code.trimmed())
+                : QStringLiteral("型号未匹配，按物料编码「%1」反查到库中型号「%2」")
+                      .arg(r.code.trimmed(), matchedModel));
         else if (modelText != r.model)
             c1->setToolTip(QStringLiteral("按库中型号「%1」匹配（(U) 后缀已归一化）").arg(matchedModel));
         auto *c2 = new QTableWidgetItem(info);
@@ -1186,10 +1334,14 @@ void MaterialCodeDialog::onStartOcr()
         m_ocrRaw->appendPlainText(QStringLiteral("----------------------------------------"));
         m_ocrRaw->appendPlainText(QString());
 
-        if (ok)
+        if (ok) {
             unpaired += parseAndAppend(text); // 配对结果紧随原始文本显示
-        else
+            // 各图片是同一份表格的连续页：这里把本页与之前页里相同的编码合并、数量累加，
+            // 合并日志紧随本页配对结果显示，便于对照原始文本核对
+            mergeDuplicateRows(true);
+        } else {
             ++failed;
+        }
 
         m_progress->setValue(i + 1);
         rebuildTable();
@@ -1214,8 +1366,17 @@ void MaterialCodeDialog::onStartOcr()
 
 void MaterialCodeDialog::onApply()
 {
-    if (m_rows.isEmpty())
+    // 写库期间 RemoteApiClient / NdMessageBox 会开嵌套事件循环，点击事件仍会派发。
+    // busy 标志 + 立即禁用按钮双重拦截，杜绝「连点提交导致重复写入」。
+    if (m_saving || m_rows.isEmpty())
         return;
+    m_saving = true;
+    m_btnApply->setEnabled(false);
+
+    // 两段式遮罩：先「正在保存至服务器，请勿操作」，保存完成后变成「操作完成」。
+    // 此处只构造不显示，让前置校验弹窗先走完
+    SavingOverlay saving(this);
+
     DatabaseManager &db = DatabaseManager::instance();
     const bool overwrite = m_chkOverwrite->isChecked();
 
@@ -1226,12 +1387,18 @@ void MaterialCodeDialog::onApply()
         const QDate today = QDate::currentDate();
         const QString dayText = logDate.toString(QStringLiteral("yyyy-MM-dd"));
         const QString todayText = today.toString(QStringLiteral("yyyy-MM-dd"));
+        // 前置校验被取消时还没写库，恢复按钮让用户改完日期后重试
+        auto restoreOnCancel = [this] {
+            m_saving = false;
+            m_btnApply->setEnabled(true);
+        };
         // 未来日期会在日/周/月/年用量统计里凭空多出记录，属于脏数据，直接禁止保存
         if (logDate > today) {
             NdMessageBox::warning(this, QStringLiteral("选择时间不合理"),
                                   QStringLiteral("数量日期 %1 晚于今天（%2），不能录入未来日期的数据。\n"
                                                  "请改成今天或之前的日期后再应用。")
                                       .arg(dayText, todayText));
+            restoreOnCancel();
             return;
         }
         // 补录历史数据同样会改变用量统计口径，保存前先确认
@@ -1240,8 +1407,10 @@ void MaterialCodeDialog::onApply()
                                        QStringLiteral("当前数量日期是 %1，不是今天（%2）。\n"
                                                       "确认按该日期保存数量吗？")
                                            .arg(dayText, todayText))) {
+            restoreOnCancel();
             return;
         }
+        saving.showBusy(); // 显示「正在保存至服务器，请勿操作」，随后同步写库
         int qtyUpdated = 0, codeUpdated = 0, skipped = 0, fail = 0, incomplete = 0, codeErr = 0;
         int byCodeMatched = 0;
         for (const Row &r : m_rows) {
@@ -1295,21 +1464,23 @@ void MaterialCodeDialog::onApply()
             ? QStringLiteral("\n其中 %1 条来自截图截断，请对照结果表核对。").arg(incomplete)
             : QString();
         const QString byCodeTip = byCodeMatched > 0
-            ? QStringLiteral("\n其中 %1 条型号不完整，已按物料编码反查到产品并正常录入数量。").arg(byCodeMatched)
+            ? QStringLiteral("\n其中 %1 条型号未直接匹配（截图截断或 OCR 读错），"
+                             "已按物料编码反查并采用库中型号，数量正常录入。").arg(byCodeMatched)
             : QString();
         const QString codeErrTip = codeErr > 0
             ? QStringLiteral("\n其中 %1 条编码位数识别错误，已跳过，库中编码保持不变。").arg(codeErr)
             : QString();
-        NdMessageBox::information(this, QStringLiteral("录入完成"),
-                                  QStringLiteral("更新数量 %1 条、更新编码 %2 条，跳过 %3 条"
-                                                 "（未收录型号、数量为空或已有值未勾选覆盖），失败 %4 条")
-                                      .arg(qtyUpdated).arg(codeUpdated)
-                                      .arg(skipped).arg(fail)
-                                  + byCodeTip + codeErrTip + incompleteTip);
+        saving.showDone(QStringLiteral("更新数量 %1 条、更新编码 %2 条，跳过 %3 条"
+                                       "（未收录型号、数量为空或已有值未勾选覆盖），失败 %4 条")
+                            .arg(qtyUpdated).arg(codeUpdated)
+                            .arg(skipped).arg(fail)
+                        + byCodeTip + codeErrTip + incompleteTip);
+        m_saving = false; // 按钮保持禁用，已提交的数据不允许再次写入
         return;
     }
 
     // ---- 物料编码模式（原有逻辑）----
+    saving.showBusy(); // 该模式无前置校验，直接显示忙碌遮罩
     int filled = 0, updated = 0, same = 0, skipped = 0, fail = 0, incomplete = 0, codeErr = 0;
     int byCodeMatched = 0;
     for (const Row &r : m_rows) {
@@ -1350,14 +1521,15 @@ void MaterialCodeDialog::onApply()
         ? QStringLiteral("\n其中 %1 条来自截图截断，请对照结果表核对。").arg(incomplete)
         : QString();
     const QString byCodeTip = byCodeMatched > 0
-        ? QStringLiteral("\n其中 %1 条型号不完整，已按物料编码反查到产品。").arg(byCodeMatched)
+        ? QStringLiteral("\n其中 %1 条型号未直接匹配（截图截断或 OCR 读错），"
+                         "已按物料编码反查并采用库中型号。").arg(byCodeMatched)
         : QString();
     const QString codeErrTip = codeErr > 0
         ? QStringLiteral("\n其中 %1 条编码位数识别错误，已跳过，库中编码保持不变。").arg(codeErr)
         : QString();
-    NdMessageBox::information(this, QStringLiteral("补充完成"),
-                              QStringLiteral("新增编码 %1 条，更新 %2 条，已一致 %3 条，"
-                                             "跳过 %4 条（未收录/不完整型号或已有编码），失败 %5 条")
-                                  .arg(filled).arg(updated).arg(same).arg(skipped).arg(fail)
-                              + byCodeTip + codeErrTip + incompleteTip);
+    saving.showDone(QStringLiteral("新增编码 %1 条，更新 %2 条，已一致 %3 条，"
+                                   "跳过 %4 条（未收录/不完整型号或已有编码），失败 %5 条")
+                        .arg(filled).arg(updated).arg(same).arg(skipped).arg(fail)
+                    + byCodeTip + codeErrTip + incompleteTip);
+    m_saving = false; // 按钮保持禁用，需重新识别后才能再次应用
 }

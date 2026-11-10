@@ -7,6 +7,7 @@
 #include <QStringList>
 #include "model/product.h"
 #include "util/stocktypes.h"
+#include "util/chiptypes.h"
 
 // 数据库管理：SQLite 单实例，负责建表与 CRUD
 class DatabaseManager : public QObject
@@ -51,6 +52,17 @@ public:
     bool importStockFile(const QString &srcPath, const QString &originalName = QString(),
                          QString *err = nullptr);
     bool deleteStockBatch(const QString &key, QString *err = nullptr);
+
+    // ---- 芯片查询（重要芯片台账）----
+    // 数据由 res 里的 chip_seed.json 首次启动导入，之后全靠本方法维护，不再导入表格。
+    // 客户端模式下全部转由 RemoteApiClient 经 HTTP 完成。
+    QStringList chipHardwares(QString *err = nullptr) const;
+    QList<ChipItem> chipModelDict(QString *err = nullptr) const;      // 按型号去重的资料字典
+    QList<ChipItem> chipSearch(const QString &mode, const QString &keyword,
+                               int limit, int *total = nullptr,
+                               QString *err = nullptr) const;          // mode: hardware / model
+    bool chipSave(ChipItem *item, QString *err = nullptr);             // 新增时写回 id
+    bool chipDelete(int id, QString *err = nullptr);
 
     static QStringList categories();   // 固定 7 大产品分类
 
@@ -107,10 +119,13 @@ public:
     // 编辑模式下回写已挂接图纸的日期/类型（不新增记录、不动文件）
     bool updateDrawingMeta(int drawingId, int dtype, const QDate &drawingDate,
                            QString *err = nullptr);
+    // 删除单张误录图纸：同时删除数据库记录与归档文件（编辑页逐张清理用）
+    bool deleteDrawing(int drawingId, QString *err = nullptr);
 
     // 用户操作日志（只在服务器主机落库，客户端的写操作由服务器统一记录）
     void setCurrentOperator(const QString &name);
-    QString currentOperator() const;
+    QString currentOperator() const;      // 空时回退为「本机」
+    QString currentOperatorRaw() const;   // 未加工原值，供请求级作用域保存/还原
     bool addOpLog(const QString &action, const QString &model, const QString &name,
                   const QString &detail);
     QList<OpLog> opLogs(const QDateTime &since) const; // 近 N 天的操作，按时间倒序
@@ -137,6 +152,8 @@ private:
     void relocateDrawingPaths(const QString &oldRoot); // 整个根目录搬迁后重写 drawing.file_path 前缀
     void syncStoredRoot();               // 把当前工作路径记入数据库（随库一起被复制，供搬迁时比对）
     void seedDefaults();
+    void seedChipData();               // 首次启动把 chip_seed.json 灌入 chip_item（幂等）
+    void fixChipBrandCountry();        // 一次性订正初始表格把恩智浦（NXP）误记成德国的数据
     void migrateHwSwToExt();             // 历史控制器 product 列的硬件/软件版本迁移进 product_ext
     void loadExtFields(Product &p) const;
 

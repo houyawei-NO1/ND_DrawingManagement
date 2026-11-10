@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>芯片查询 · 界面预览</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1440px;height:900px;overflow:hidden;background:#2B3046;color:#fff;
+     font-family:"Microsoft YaHei","Segoe UI",sans-serif;font-size:13px}
+.mono{font-family:Consolas,"Courier New",monospace}
+
+/* ---------- 标题栏 ---------- */
+.titlebar{height:34px;background:#2B3046;display:flex;align-items:center;padding:0 12px;
+          border-bottom:1px solid rgba(255,255,255,.08)}
+.logo{width:20px;height:20px;border-radius:5px;background:#43CF7C;color:#0B1F14;
+      font-size:10px;font-weight:bold;display:flex;align-items:center;justify-content:center}
+.appname{margin-left:9px;font-size:15px;font-weight:bold;letter-spacing:.5px}
+.title-right{margin-left:auto;display:flex;align-items:center;gap:16px;color:#9FB0C9;font-size:11px}
+.title-right b{color:#43CF7C;font-weight:normal}
+.winbtn{width:26px;height:22px;display:flex;align-items:center;justify-content:center;
+        color:#cfd3e0;font-size:14px}
+
+/* ---------- 顶部菜单 ---------- */
+.menubar{height:44px;display:flex;align-items:stretch;background:#2B3046;
+         border-bottom:1px solid rgba(255,255,255,.08)}
+.mbtn{width:88px;display:flex;align-items:center;justify-content:center;color:#cfd5e4;font-size:14px}
+.mbtn.active{background:#1a67c0;color:#fff}
+.menu-spacer{flex:1}
+.menu-right{display:flex;align-items:center;padding-right:18px;color:#8A95AC;font-size:11px;gap:8px}
+
+/* ---------- 工具页 Tab ---------- */
+.tabs{height:40px;display:flex;align-items:stretch;background:#2B3046;
+      border-bottom:1px solid rgba(255,255,255,.08)}
+.tab{padding:0 28px;display:flex;align-items:center;color:#fff;font-size:15px}
+.tab.active{color:#43CF7C;background:#1E3B2C;border-bottom:2px solid #43CF7C}
+.tab-badge{margin-left:8px;background:rgba(67,207,124,.16);color:#43CF7C;
+           border:1px solid rgba(67,207,124,.35);border-radius:9px;padding:1px 7px;font-size:10px}
+
+/* ---------- 主体 ---------- */
+.page{position:relative;padding:14px 16px 10px;height:calc(900px - 34px - 44px - 40px - 22px)}
+.left{margin-right:392px}
+.tip-row{height:26px;display:flex;align-items:center;color:#9AA6BD;font-size:12px}
+.tip-row .login{margin-left:auto;color:#8CE0B7;font-size:11px;display:flex;align-items:center;gap:6px}
+.dot{width:7px;height:7px;border-radius:50%;background:#43CF7C;box-shadow:0 0 6px #43CF7C}
+
+.query-row{height:38px;margin-top:10px;display:flex;align-items:center;gap:8px}
+.seg{display:flex;height:34px;border:1px solid #4A5468;border-radius:8px;overflow:hidden;flex-shrink:0}
+.seg div{padding:0 15px;display:flex;align-items:center;color:rgba(255,255,255,.6);font-size:12px}
+.seg div.on{background:#1E3B2C;color:#43CF7C;font-weight:bold}
+.seg div+div{border-left:1px solid #4A5468}
+.input{height:34px;flex:1;background:#22293C;border:1px solid #4A5468;border-radius:8px;
+       display:flex;align-items:center;padding:0 10px;color:#fff;font-size:12px;gap:8px}
+.input .ph{color:#91949E}
+.input .clear{margin-left:auto;width:16px;height:16px;border-radius:50%;
+              border:1.5px solid #8A90A6;display:flex;align-items:center;justify-content:center;
+              color:#8A90A6;font-size:10px}
+.btn{height:34px;padding:0 16px;border-radius:8px;display:flex;align-items:center;
+     justify-content:center;font-size:12px;font-weight:bold;flex-shrink:0;cursor:pointer}
+.btn-green{background:#43CF7C;color:#0B1F14}
+.btn-ghost{background:transparent;border:1px solid #4A5468;color:rgba(255,255,255,.85);font-weight:normal}
+.btn-red{background:#E06C75;color:#fff}
+.vline{width:1px;height:22px;background:rgba(255,255,255,.12);margin:0 2px}
+
+.result-bar{height:26px;margin-top:10px;background:rgba(67,207,124,.08);
+            border:1px solid rgba(67,207,124,.28);border-radius:4px;display:flex;
+            align-items:center;padding:0 10px;color:#8CE0B7;font-size:11px}
+.result-bar .right{margin-left:auto;color:#6D9C82}
+
+/* ---------- 表格 ---------- */
+.tbl{margin-top:8px;width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
+.tbl th{background:#22293C;color:rgba(255,255,255,.55);font-weight:normal;font-size:11px;
+        height:30px;text-align:center;border-bottom:1px solid rgba(255,255,255,.1)}
+.tbl td{height:29px;text-align:center;border-bottom:1px solid rgba(255,255,255,.06);
+        color:rgba(255,255,255,.85);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.tbl tr.sel td{background:rgba(67,207,124,.18);color:#fff}
+.tbl td.hw{background:rgba(67,207,124,.05);color:#8CE0B7;font-weight:bold;vertical-align:middle;
+           border-right:1px solid rgba(255,255,255,.08);border-bottom:1px solid rgba(255,255,255,.06)}
+.tbl td.model{color:#63E6A8;font-family:Consolas,"Courier New",monospace;cursor:pointer}
+.tbl td.qty{color:#E7ECF8;font-weight:bold}
+.tbl td.func{text-align:left;padding-left:12px;color:rgba(255,255,255,.72)}
+.tbl td.brand{color:rgba(255,255,255,.72);font-size:11px}
+
+.tbl-wrap{height:392px;border:1px solid rgba(255,255,255,.08);border-radius:4px;
+          background:#2B3046;overflow:hidden}
+
+/* ---------- 数量汇总 ---------- */
+.summary{margin-top:10px;background:rgba(0,0,0,.16);border:1px solid #4A5468;
+         border-radius:8px;padding:9px 12px;display:flex;align-items:center;gap:14px;font-size:11px}
+.summary .k{color:#9AA6BD;flex-shrink:0}
+.summary .v{color:rgba(255,255,255,.82)}
+.summary .v b{color:#63E6A8;font-weight:bold}
+.summary .total{margin-left:auto;flex-shrink:0;background:rgba(67,207,124,.12);
+                border:1px solid rgba(67,207,124,.32);border-radius:12px;
+                padding:3px 12px;color:#8CE0B7}
+
+/* ---------- 反查示例卡 ---------- */
+.reverse{margin-top:10px;background:rgba(0,0,0,.16);border:1px solid #4A5468;border-radius:8px;
+         padding:9px 12px;display:flex;align-items:center;gap:12px;font-size:11px}
+.reverse .tag{background:#2B364C;color:#A9B5CC;border-radius:9px;padding:2px 9px;flex-shrink:0}
+.reverse .rk{color:#63E6A8;font-family:Consolas,monospace}
+.reverse .hwlist{color:rgba(255,255,255,.78)}
+
+/* ---------- 状态栏 ---------- */
+.statusbar{height:22px;display:flex;align-items:center;padding:0 16px;color:#6D7890;font-size:10px;
+           border-top:1px solid rgba(255,255,255,.06);background:#2B3046}
+.statusbar .right{margin-left:auto}
+
+/* ---------- 右侧新增弹层 ---------- */
+.popup{position:absolute;right:16px;top:14px;width:360px;height:602px;
+       background:rgba(8,12,20,.95);border:1px solid rgba(160,180,220,.22);border-radius:9px;
+       box-shadow:0 12px 40px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden}
+.pop-head{height:42px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 12px;
+          background:rgba(255,255,255,.035);border-bottom:1px solid rgba(255,255,255,.10)}
+.glow{width:8px;height:8px;border-radius:4px;background:#43CF7C}
+.pop-title{font-size:13px;font-weight:bold;color:#E6EBF7}
+.pop-sub{margin-left:auto;font-size:10px;color:#7E8AA2}
+.pop-close{font-size:17px;color:#8B95AC}
+.pop-body{padding:12px;flex:1;overflow:hidden}
+.sec{font-size:11px;color:#9AA6BD;margin-bottom:7px}
+.quick{background:rgba(67,207,124,.07);border:1px solid rgba(67,207,124,.30);border-radius:6px;
+       padding:9px;margin-bottom:12px}
+.quick-hd{font-size:11px;color:#8CE0B7;margin-bottom:7px;display:flex;align-items:center;gap:6px}
+.quick-input{height:30px;background:#111722;border:1px solid #43CF7C;border-radius:5px;
+             display:flex;align-items:center;padding:0 9px;font-size:11px;color:#fff}
+.quick-input .x{margin-left:auto;color:#8A95AC}
+.quick-list{margin-top:6px;background:#111722;border:1px solid #3A465F;border-radius:5px;overflow:hidden}
+.quick-item{height:27px;display:flex;align-items:center;padding:0 9px;font-size:11px;gap:8px;
+            color:#A9B6CC;border-bottom:1px solid rgba(255,255,255,.05)}
+.quick-item:last-child{border-bottom:none}
+.quick-item.on{background:rgba(67,207,124,.16);color:#E7ECF8}
+.quick-item .m{font-family:Consolas,monospace;color:#63E6A8}
+.quick-item .b{margin-left:auto;color:#6D7890;font-size:10px}
+.autofill{font-size:10px;color:#8CE0B7;margin-top:7px}
+.fields{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.field label{display:block;font-size:10px;color:#9AA6BD;margin-bottom:4px}
+.field label i{color:#E06C75;font-style:normal}
+.field .box{height:29px;background:#111722;border:1px solid #3A465F;border-radius:5px;
+            display:flex;align-items:center;padding:0 8px;font-size:11px;color:#E7ECF8}
+.field .box.ph{color:#6D7890}
+.field.full{grid-column:1/3}
+.pop-foot{height:46px;flex-shrink:0;display:flex;align-items:center;justify-content:flex-end;
+          gap:8px;padding:0 12px;border-top:1px solid rgba(255,255,255,.10)}
+.pop-foot .note{margin-right:auto;font-size:10px;color:#6D7890}
+.pop-foot .btn{height:30px;font-size:11px;padding:0 14px}
+</style>
+</head>
+<body>
+
+<!-- 标题栏 -->
+<div class="titlebar">
+  <div class="logo">ND</div><div class="appname">南都图纸管理</div>
+  <div class="title-right">
+    <span>侯亚威 <b>● 已登录</b></span>
+    <span>服务器 192.168.1.168:90</span>
+    <span>版本号 2035-11-09</span>
+    <span class="winbtn">—</span><span class="winbtn">□</span><span class="winbtn">×</span>
+  </div>
+</div>
+
+<!-- 顶部菜单 -->
+<div class="menubar">
+  <div class="mbtn">主界面</div><div class="mbtn">录入</div><div class="mbtn">管理</div>
+  <div class="mbtn">设置</div><div class="mbtn active">工具</div>
+  <div class="menu-spacer"></div>
+  <div class="menu-right">工具 · 常用查询</div>
+</div>
+
+<!-- 工具页 Tab -->
+<div class="tabs">
+  <div class="tab">库存查询</div>
+  <div class="tab active">芯片查询 <span class="tab-badge">NEW</span></div>
+  <div class="tab">关于</div>
+</div>
+
+<div class="page">
+
+  <div class="left">
+    <div class="tip-row">
+      芯片资料已导入系统数据库，表格只作初始数据来源；之后在系统内直接维护。
+      <span class="login"><span class="dot"></span>管理员 · 可新增 / 修改 / 删除</span>
+    </div>
+
+    <!-- 查询行 -->
+    <div class="query-row">
+      <div class="seg"><div class="on">按硬件查询</div><div>按芯片反查</div></div>
+      <div class="input"><span class="ph">输入硬件版本，如 V2ATC701</span><span class="clear">×</span></div>
+      <div class="btn btn-green">搜 索</div>
+      <div class="vline"></div>
+      <div class="btn btn-green">＋ 新增</div>
+      <div class="btn btn-ghost">修改</div>
+      <div class="btn btn-red">删除</div>
+    </div>
+
+    <div class="result-bar">
+      <span>按硬件 <b>V2ATC701</b> 查询：共 11 种重要芯片，合计 21 颗</span>
+      <span class="right">点「型号」可反查使用该芯片的所有硬件</span>
+    </div>
+
+    <!-- 结果表 -->
+    <div class="tbl-wrap">
+    <table class="tbl">
+      <colgroup><col style="width:112px"><col style="width:88px"><col style="width:168px">
+      <col style="width:56px"><col style="width:186px"><col style="width:60px"><col></colgroup>
+      <thead><tr><th>硬件版本</th><th>类型</th><th>型号</th><th>数量</th><th>功能</th><th>国家</th><th>品牌</th></tr></thead>
+      <tbody>
+        <tr><td class="hw" rowspan="11">V2ATC701</td><td>主控芯片</td><td class="model">SAK-TC1766-192F80HL</td><td class="qty">1</td><td class="func">运行控制程序</td><td>德国</td><td class="brand">英飞凌</td></tr>
+        <tr><td>驱动芯片</td><td class="model">TLE742G</td><td class="qty">1</td><td class="func">四通道低边功率开关驱动器</td><td>德国</td><td class="brand">英飞凌</td></tr>
+        <tr class="sel"><td>电源芯片</td><td class="model">TLE4275</td><td class="qty">2</td><td class="func">线性稳压器（LDO）</td><td>德国</td><td class="brand">英飞凌</td></tr>
+        <tr><td>电源芯片</td><td class="model">TLE42610G</td><td class="qty">1</td><td class="func">低压差线性稳压器（LDO）</td><td>德国</td><td class="brand">英飞凌</td></tr>
+        <tr><td>功率元件</td><td class="model">VND14NV04</td><td class="qty">4</td><td class="func">功率电子开关</td><td>瑞士</td><td class="brand">意法半导体</td></tr>
+        <tr><td>功率元件</td><td class="model">BTS600P</td><td class="qty">3</td><td class="func">高侧功率开关</td><td>美国</td><td class="brand">英飞凌</td></tr>
+        <tr><td>功率元件</td><td class="model">BTS500P</td><td class="qty">1</td><td class="func">智能高侧功率开关</td><td>美国</td><td class="brand">安森美</td></tr>
+        <tr><td>信号链芯片</td><td class="model">TLE6250G</td><td class="qty">2</td><td class="func">CAN 总线收发器</td><td>德国</td><td class="brand">英飞凌</td></tr>
+        <tr><td>信号链芯片</td><td class="model">MAX3221</td><td class="qty">1</td><td class="func">RS232 通信芯片</td><td>美国</td><td class="brand">ADI / MAXIM</td></tr>
+        <tr><td>信号链芯片</td><td class="model">LM393DR</td><td class="qty">2</td><td class="func">双路电压比较器</td><td>美国</td><td class="brand">德州仪器（TI）</td></tr>
+        <tr><td>信号链芯片</td><td class="model">SN74HC14D</td><td class="qty">3</td><td class="func">施密特触发反相器</td><td>美国</td><td class="brand">德州仪器（TI）</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <!-- 数量汇总 -->
+    <div class="summary">
+      <span class="k">按类型</span>
+      <span class="v">主控 <b>1</b> · 驱动 <b>1</b> · 电源 <b>3</b> · 功率 <b>8</b> · 信号链 <b>8</b></span>
+      <span class="k" style="margin-left:10px">按国家</span>
+      <span class="v">德国 <b>7</b> · 美国 <b>10</b> · 瑞士 <b>4</b></span>
+      <span class="total">合计 21 颗</span>
+    </div>
+
+    <!-- 反查示例 -->
+    <div class="reverse">
+      <span class="tag">按芯片反查</span>
+      <span class="rk">TLE4275</span>
+      <span class="hwlist">SAFE402 2020.6（1 颗） · V2ATC701（2 颗） · VAQC901（1 颗）</span>
+      <span style="margin-left:auto;color:#8CE0B7">合计 4 颗 / 3 个硬件</span>
+    </div>
+  </div>
+
+  <!-- 右侧：新增 / 编辑芯片弹层 -->
+  <div class="popup">
+    <div class="pop-head">
+      <span class="glow"></span><span class="pop-title">新增芯片记录</span>
+      <span class="pop-sub">芯片查询</span><span class="pop-close">×</span>
+    </div>
+    <div class="pop-body">
+      <div class="sec">快速添加已有芯片</div>
+      <div class="quick">
+        <div class="quick-hd">● 新硬件含有已有芯片资料时，直接选型号带出信息</div>
+        <div class="quick-input"><span class="mono">TLE4275</span><span class="x">×</span></div>
+        <div class="quick-list">
+          <div class="quick-item on"><span class="m">TLE4275</span><span>线性稳压器（LDO）</span><span class="b">英飞凌</span></div>
+          <div class="quick-item"><span class="m">TLE6250G</span><span>CAN 总线收发器</span><span class="b">英飞凌</span></div>
+          <div class="quick-item"><span class="m">MAX3221</span><span>RS232 通信芯片</span><span class="b">ADI</span></div>
+        </div>
+        <div class="autofill">✓ 已自动带出 类型 / 功能 / 国家 / 品牌，只需填硬件版本与数量</div>
+      </div>
+
+      <div class="sec">芯片信息 <span style="color:#6D7890">（可手动修改）</span></div>
+      <div class="fields">
+        <div class="field"><label>硬件版本 <i>*</i></label><div class="box">V2ATC701</div></div>
+        <div class="field"><label>型号 <i>*</i></label><div class="box mono">TLE4275</div></div>
+        <div class="field"><label>类型</label><div class="box">电源芯片</div></div>
+        <div class="field"><label>数量 <i>*</i></label><div class="box mono">2</div></div>
+        <div class="field full"><label>功能</label><div class="box">线性稳压器（LDO）</div></div>
+        <div class="field"><label>国家</label><div class="box">德国</div></div>
+        <div class="field"><label>品牌</label><div class="box">英飞凌</div></div>
+      </div>
+
+      <div style="margin-top:14px;background:rgba(255,255,255,.022);border:1px solid rgba(255,255,255,.08);
+                  border-radius:6px;padding:9px 10px;font-size:10px;color:#8A95AC;line-height:1.8">
+        未登录：仅可查询、复制，管理按钮置灰<br>
+        已登录：可新增 / 修改 / 删除，操作写入变更记录
+      </div>
+    </div>
+    <div class="pop-foot">
+      <span class="note">* 为必填项</span>
+      <div class="btn btn-ghost">取 消</div>
+      <div class="btn btn-green">保 存</div>
+    </div>
+  </div>
+</div>
+
+<div class="statusbar">
+  <span>芯片查询 · 数据来源：系统数据库（初始由 Excel 一次性导入）</span>
+  <span class="right">只读查询无需登录 · 管理操作需已登录账号</span>
+</div>
+
+</body>
+</html>

@@ -6,6 +6,7 @@
 #include <QStringList>
 
 class QTabWidget;
+class ChipQueryPage;
 class QComboBox;
 class QTableWidget;
 class QLineEdit;
@@ -20,6 +21,9 @@ public:
 
     // 切到工具页时由 MainWindow 调用：批次为空才向服务器取列表，离线时不阻塞
     void onPageShown();
+
+    // 登录态变化由 MainWindow 推入：芯片查询页据此开放/关闭新增、修改、删除
+    void setLoggedIn(const QString &user);
 
 private slots:
     void onPickStockFile();
@@ -45,6 +49,9 @@ private:
     QTableWidget *m_stockTable = nullptr;
     QLabel *m_lblStockInfo = nullptr;
     QLabel *m_lblStockResult = nullptr;
+
+    // 芯片查询
+    ChipQueryPage *m_chipPage = nullptr;
 };
 
 #endif // TOOLSPAGE_H

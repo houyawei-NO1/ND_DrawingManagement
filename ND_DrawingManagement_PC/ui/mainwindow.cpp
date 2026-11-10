@@ -9,6 +9,9 @@
 #include "server/updatemanager.h"
 #include "server/remoteapiclient.h"
 #include "roledialog.h"
+#include "ocrimagedrop.h"
+#include "ocrresultpopup.h"
+#include "ocrhelper.h"
 
 #include <QCoreApplication>
 #include <QTimer>
@@ -61,6 +64,15 @@
 #include <QCursor>
 #include <QDir>
 #include <QContextMenuEvent>
+#include <QSet>
+#include <QColor>
+#include <QPointer>
+#include <QImage>
+#include <QDateTime>
+#include <QCheckBox>
+#include <QShortcut>
+#include <QKeySequence>
+#include <QMimeData>
 #include <cstdlib>
 
 namespace {
@@ -92,6 +104,27 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent)
     p0->addWidget(toolBar);
     p0->addWidget(catBar);
     p0->addWidget(body, 1);
+
+    // 复制订单截图后按 Ctrl+V 直接粘进拖拽框。只绑在主界面页 page0：
+    // 录入页 / 数量录入页有各自的 Ctrl+V，绑到 MainWindow 会形成 ambiguous shortcut。
+    auto *pasteShortcut = new QShortcut(QKeySequence::Paste, page0);
+    pasteShortcut->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(pasteShortcut, &QShortcut::activated, this, [this] {
+        if (!m_imgDrop)
+            return;
+        const QMimeData *mime = QGuiApplication::clipboard()->mimeData();
+        if (auto *le = qobject_cast<QLineEdit *>(QApplication::focusWidget())) {
+            if (!mime || !mime->hasImage()) {
+                le->paste(); // 焦点在文本框且剪贴板是文字：保持普通粘贴
+                return;
+            }
+        }
+        m_imgDrop->pasteFromClipboard();
+    });
+
+    // OCR 结果浮层挂在页面 0：切到录入/管理等页面时随页面一起隐藏
+    m_ocrPopup = new OcrResultPopup(page0);
+    m_ocrPopup->hide();
 
     // 页面1：录入；页面2：管理；页面3：设置；页面4：工具（库存查询 + 关于）
     m_entryPage = new EntryDialog(this);
@@ -134,6 +167,11 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent)
     connect(m_entryPage, &EntryDialog::cancelled, this, [this] {
         m_stack->setCurrentIndex(0);
         m_menuGroup->button(0)->setChecked(true);
+    });
+    // 编辑页逐张删除图纸后立即生效，同步刷新列表，避免残留已删图纸
+    connect(m_entryPage, &EntryDialog::drawingsChanged, this, [this] {
+        reloadTable();
+        m_managePage->refresh();
     });
     // 备份还原后数据库文件已被替换，重新查询列表
     connect(m_settingsPage, &SettingsDialog::databaseRestored, this, [this] {
@@ -232,46 +270,10 @@ static QIcon makeTitleIcon(const QString &type)
     return QIcon(pm);
 }
 
-// 搜索框内的一键清除按钮：平时灰色空心圆圈 + 灰叉，悬停/按下时实心红圆 + 红叉
-// （亮红圆上画同色亮红叉会看不见，叉用深红，仍属红色系且对比清晰）
+// 搜索框内的一键清除按钮：与「拖入图片」框、OCR 原文查找框共用同一套图标
 static QIcon makeClearSearchIcon()
 {
-    static const QColor gray(QStringLiteral("#8A90A6"));
-    static const QColor red(QStringLiteral("#FF5252"));
-    static const QColor darkRed(QStringLiteral("#8E1B1B"));
-    const auto draw = [](bool hover) {
-        const int s = 20;
-        QPixmap pm(s, s);
-        pm.fill(Qt::transparent);
-        QPainter p(&pm);
-        p.setRenderHint(QPainter::Antialiasing);
-        const QRectF circle(2.5, 2.5, 15, 15);
-        if (hover) {
-            p.setPen(Qt::NoPen);
-            p.setBrush(red);
-            p.drawEllipse(circle);
-        } else {
-            p.setBrush(Qt::NoBrush);
-            p.setPen(QPen(gray, 1.6, Qt::SolidLine, Qt::RoundCap));
-            p.drawEllipse(circle);
-        }
-        p.setPen(QPen(hover ? darkRed : gray, 1.8, Qt::SolidLine, Qt::RoundCap));
-        const QRectF r(7, 7, 6, 6);
-        p.drawLine(r.topLeft(), r.bottomRight());
-        p.drawLine(r.topRight(), r.bottomLeft());
-        p.end();
-        return pm;
-    };
-
-    QIcon icon;
-    // 输入框内部按钮在鼠标悬停/按下时会取 Active / Selected 状态的图标
-    const QIcon::State states[] = {QIcon::On, QIcon::Off};
-    for (QIcon::State st : states) {
-        icon.addPixmap(draw(false), QIcon::Normal, st);
-        icon.addPixmap(draw(true), QIcon::Active, st);
-        icon.addPixmap(draw(true), QIcon::Selected, st);
-    }
-    return icon;
+    return OcrHelper::makeClearIcon();
 }
 
 // ---------- 标题栏 ----------
@@ -566,6 +568,37 @@ void MainWindow::buildToolBar()
     lay->addWidget(m_btnSearch);
     lay->addWidget(m_cmbDrawingType);
 
+    // 图纸筛选后面：拖入订单截图 → 自动 OCR → 多型号一次性搜索
+    m_imgDrop = new OcrImageDrop(bar);
+    lay->addWidget(m_imgDrop);
+    connect(m_imgDrop, &OcrImageDrop::imageDropped,
+            this, &MainWindow::onImageDropped);
+    connect(m_imgDrop, &OcrImageDrop::cleared, this, [this] { clearOcrSearch(); });
+
+    // 默认搜索所有包含的型号；勾选后只显示与识别型号一模一样的记录
+    m_chkExactModel = new QCheckBox(QStringLiteral("型号一致"), bar);
+    m_chkExactModel->setObjectName(QStringLiteral("chkExactModel"));
+    m_chkExactModel->setToolTip(QStringLiteral(
+        "不勾选：搜索所有包含识别型号的记录；勾选：只搜索型号完全一致的记录"));
+    m_chkExactModel->setChecked(false);
+    m_chkExactModel->setStyleSheet(QStringLiteral(
+        "QCheckBox{color:rgba(255,255,255,0.72);font-size:11px;spacing:5px;}"
+        "QCheckBox::indicator{width:14px;height:14px;border:1px solid #4A5468;"
+        "border-radius:3px;background:rgba(0,0,0,0.20);}"
+        "QCheckBox::indicator:hover{border-color:#43CF7C;}"
+        "QCheckBox::indicator:checked{background:#43CF7C;border-color:#43CF7C;}"));
+    lay->addWidget(m_chkExactModel);
+    connect(m_chkExactModel, &QCheckBox::toggled, this, [this](bool) {
+        if (m_ocrModels.isEmpty())
+            return;
+        reloadTable();
+        // 匹配条数随口径变化，弹窗里的「匹配 N 条」也要跟着刷新
+        if (m_ocrPopup && m_ocrPopup->isVisible())
+            m_ocrPopup->setResult(m_ocrRawText, m_ocrModels, ocrMatchCounts(),
+                QFileInfo(m_imgDrop ? m_imgDrop->imagePath() : QString()).fileName(),
+                m_ocrRawModels);
+    });
+
     lay->addStretch();
 
     // 搜索框右侧红色叉号：点一下清空并恢复全部列表；无输入时不显示
@@ -582,12 +615,17 @@ void MainWindow::buildToolBar()
         }
     }
     connect(clearAct, &QAction::triggered, this, [this] {
-        m_searchEdit->clear();
+        clearOcrSearch(); // 清空内容，同时退出图片 OCR 的多型号搜索模式
         m_searchEdit->setFocus();
-        onSearch(); // 清空后立刻恢复全部列表，避免表格还停留在过滤结果
     });
     connect(m_searchEdit, &QLineEdit::textChanged, this,
             [clearAct](const QString &s) { clearAct->setVisible(!s.isEmpty()); });
+    // 用户手动改关键字就退出 OCR 模式（程序 setText 不会触发 textEdited）。
+    // 不立即刷新表格，避免逐字触发数据库/网络查询，等回车或点搜索再查。
+    connect(m_searchEdit, &QLineEdit::textEdited, this, [this](const QString &) {
+        if (!m_ocrModels.isEmpty())
+            clearOcrSearch(false, false);
+    });
 
     connect(m_btnSearch, &QPushButton::clicked, this, &MainWindow::onSearch);
     connect(m_searchEdit, &QLineEdit::returnPressed, this, &MainWindow::onSearch);
@@ -626,6 +664,31 @@ void MainWindow::buildBody()
     connect(m_table, &QTableWidget::cellDoubleClicked, this, &MainWindow::onTableDoubleClicked);
     m_table->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_table, &QTableWidget::customContextMenuRequested, this, &MainWindow::onTableContextMenu);
+
+    // 图片 OCR 多型号搜索的结果提示条：平时隐藏
+    m_ocrResultBar = new QWidget(leftCol);
+    m_ocrResultBar->setObjectName(QStringLiteral("ocrResultBar"));
+    m_ocrResultBar->setFixedHeight(26);
+    auto *rbLay = new QHBoxLayout(m_ocrResultBar);
+    rbLay->setContentsMargins(10, 0, 6, 0);
+    rbLay->setSpacing(8);
+    m_ocrResultLabel = new QLabel(m_ocrResultBar);
+    rbLay->addWidget(m_ocrResultLabel);
+    rbLay->addStretch();
+    auto *ocrClear = new QPushButton(QStringLiteral("清除搜索 ×"), m_ocrResultBar);
+    ocrClear->setObjectName(QStringLiteral("ocrClearBtn"));
+    ocrClear->setFlat(true);
+    ocrClear->setCursor(Qt::PointingHandCursor);
+    connect(ocrClear, &QPushButton::clicked, this, [this] { clearOcrSearch(); });
+    rbLay->addWidget(ocrClear);
+    m_ocrResultBar->setStyleSheet(QStringLiteral(
+        "#ocrResultBar{background:rgba(67,207,124,0.10);"
+        "border:1px solid rgba(67,207,124,0.28);border-radius:4px;}"
+        "#ocrResultBar QLabel{background:transparent;color:#8CE0B7;font-size:11px;}"
+        "#ocrClearBtn{background:transparent;border:none;color:#8CE0B7;font-size:11px;}"
+        "#ocrClearBtn:hover{color:#43CF7C;}"));
+    m_ocrResultBar->hide();
+    lcolLay->addWidget(m_ocrResultBar);
     lcolLay->addWidget(m_table, 1);
 
     // 右：图纸预览
@@ -823,13 +886,213 @@ void MainWindow::onCategoryChanged(int index)
 
 void MainWindow::onSearch() { reloadTable(); }
 
+// 拖入图片后异步跑离线 OCR，避免识别期间卡住界面
+void MainWindow::onImageDropped(const QString &path)
+{
+    const QString exe = OcrHelper::enginePath();
+    if (exe.isEmpty()) {
+        NdMessageBox::warning(this, QStringLiteral("识别失败"),
+                              QStringLiteral("未找到离线识别引擎：ocr/PaddleOCR-json/PaddleOCR-json.exe"));
+        return;
+    }
+    if (m_ocrProc) { // 换图时静默中止上一次识别
+        m_ocrProc->disconnect(this);
+        m_ocrProc->kill();
+        m_ocrProc->deleteLater();
+    }
+    QProcess *proc = new QProcess(this);
+    m_ocrProc = proc;
+    if (m_imgDrop)
+        m_imgDrop->setBusy(true);
+    proc->setWorkingDirectory(QFileInfo(exe).absolutePath());
+    connect(proc, &QProcess::finished, this, [this, proc](int, QProcess::ExitStatus) {
+        if (m_ocrProc != proc)
+            return;
+        QString text;
+        const bool ok = OcrHelper::parseOcrJsonText(proc->readAllStandardOutput(), &text);
+        m_ocrProc = nullptr;
+        proc->deleteLater();
+        onOcrFinished(ok, text);
+    });
+    connect(proc, &QProcess::errorOccurred, this, [this, proc](QProcess::ProcessError) {
+        if (m_ocrProc != proc)
+            return;
+        m_ocrProc = nullptr;
+        proc->deleteLater();
+        onOcrFinished(false, QString());
+    });
+    // PaddleOCR-json 用窄字符路径，聊天/IDE 附件那种超长路径会报「Image path dose not exist」，
+    // 统一复制到临时短路径；弹窗里仍显示拖入时的原始文件名。
+    // 产品录入页只识别裁剪出来的标题栏 ROI，字大干扰少；采购单型号分布在整页，
+    // 不能裁剪。实测把 1080px 宽的订单截图再放大 2 倍，小字笔画反而粘连、会漏识别
+    // 型号，因此这里保持原尺寸，只做白底 + PNG 无损（与数量录入一致，避免 JPEG
+    // 二次压缩糊掉 L/1、0/O 这类细笔画），仅对明显偏小/超大的图做温和缩放。
+    QString workPath = path;
+    const QImage src(path);
+    if (!src.isNull()) {
+        QImage work = src;
+        if (work.hasAlphaChannel()) { // 透明底在引擎里会变成黑块，先铺白底
+            QImage flat(work.size(), QImage::Format_RGB32);
+            flat.fill(Qt::white);
+            QPainter p(&flat);
+            p.drawImage(0, 0, work);
+            p.end();
+            work = flat;
+        }
+        const int side = qMax(work.width(), work.height());
+        int target = side;
+        if (side < 900)
+            target = 900;  // 小图才温和放大
+        else if (side > 3600)
+            target = 3600; // 超大图收一下，避免引擎内部缩放过度
+        if (target != side) {
+            work = (work.width() >= work.height())
+                ? work.scaledToWidth(target, Qt::SmoothTransformation)
+                : work.scaledToHeight(target, Qt::SmoothTransformation);
+        }
+        const QString tmp = QDir::tempPath()
+            + QStringLiteral("/nd_main_ocr_%1.png")
+                  .arg(QDateTime::currentDateTime().toString(
+                      QStringLiteral("yyyyMMdd_HHmmss_zzz")));
+        if (work.save(tmp, "PNG"))
+            workPath = tmp;
+    }
+    proc->start(exe, {QStringLiteral("-image_path=") + QDir::toNativeSeparators(workPath),
+                      QStringLiteral("-ensure_ascii=false")});
+    // 兜底超时：引擎异常时不要一直停在「识别中」。
+    // QPointer 防止进程已 deleteLater 后定时器访问悬空指针。
+    QPointer<QProcess> guard(proc);
+    QTimer::singleShot(120000, this, [this, proc, guard] {
+        if (guard && m_ocrProc == proc && proc->state() != QProcess::NotRunning)
+            proc->kill();
+    });
+}
+
+void MainWindow::onOcrFinished(bool ok, const QString &text)
+{
+    if (m_imgDrop)
+        m_imgDrop->setBusy(false);
+    if (!ok || text.trimmed().isEmpty()) {
+        NdMessageBox::warning(this, QStringLiteral("识别失败"),
+                              QStringLiteral("未能从图片中识别到文字，请换一张清晰的订单截图。"));
+        return;
+    }
+    m_ocrRawText = text;
+    m_ocrRawModels = OcrHelper::extractModels(text);
+    // 整页小字 OCR 会把 X 读成 3 / 漏字符 / 把 D 读成 I，直接用错型号搜库是搜不到的。
+    // 拿数据库里的真实型号当词典，按形近字符编辑距离纠正后再搜索。
+    QStringList dict;
+    for (const Product &p : DatabaseManager::instance().searchProducts(
+             QString(), QString(), -1))
+        dict << p.model;
+    m_ocrModels = OcrHelper::correctModels(m_ocrRawModels, dict);
+    // 搜索框只做结果展示，真正的过滤用 m_ocrModels
+    if (m_ocrModels.size() == 1)
+        m_searchEdit->setText(m_ocrModels.first());
+    else if (m_ocrModels.size() > 1)
+        m_searchEdit->setText(QStringLiteral("%1 等 %2 个型号")
+                                  .arg(m_ocrModels.first()).arg(m_ocrModels.size()));
+    else
+        m_searchEdit->clear();
+    reloadTable();
+
+    if (m_ocrPopup) {
+        m_ocrPopup->setResult(m_ocrRawText, m_ocrModels, ocrMatchCounts(),
+            QFileInfo(m_imgDrop ? m_imgDrop->imagePath() : QString()).fileName(),
+            m_ocrRawModels);
+        m_ocrPopup->show();
+        positionOcrPopup();
+    }
+}
+
+QList<int> MainWindow::ocrMatchCounts() const
+{
+    const bool exactOnly = m_chkExactModel && m_chkExactModel->isChecked();
+    QList<int> counts;
+    for (const QString &m : m_ocrModels) {
+        QSet<QString> one;
+        one.insert(OcrHelper::normalizeModelKey(m));
+        int n = 0;
+        for (const Product &p : m_products) {
+            if (OcrHelper::modelHit(OcrHelper::normalizeModelKey(p.model), one, exactOnly))
+                ++n;
+        }
+        counts << n;
+    }
+    return counts;
+}
+
+void MainWindow::clearOcrSearch(bool resetSearchText, bool refresh)
+{
+    m_ocrModels.clear();
+    m_ocrRawModels.clear();
+    m_ocrRawText.clear();
+    if (m_ocrProc) { // 清除时也中止尚未结束的识别
+        m_ocrProc->disconnect(this);
+        m_ocrProc->kill();
+        m_ocrProc->deleteLater();
+        m_ocrProc = nullptr;
+    }
+    if (m_ocrPopup)
+        m_ocrPopup->hide();
+    if (m_ocrResultBar)
+        m_ocrResultBar->hide();
+    if (resetSearchText)
+        m_searchEdit->clear();
+    if (refresh)
+        reloadTable();
+}
+
+void MainWindow::positionOcrPopup()
+{
+    if (!m_ocrPopup)
+        return;
+    QWidget *host = m_ocrPopup->parentWidget();
+    if (!host)
+        return;
+    const int w = 378;
+    const int h = qMin(566, qMax(300, host->height() - 120));
+    m_ocrPopup->setGeometry(host->width() - w - 18, 88, w, h);
+    m_ocrPopup->raise();
+}
+
 void MainWindow::reloadTable()
 {
     const int dtype = m_cmbDrawingType->currentData().toInt();
     const QString kw = m_searchEdit->text().trimmed();
     // 搜索范围由选中的页签决定：「所有类别」搜索全部分类，具体分类只搜该分类
     const bool all = m_currentCat.isEmpty();
-    m_products = DatabaseManager::instance().searchProducts(m_currentCat, kw, dtype);
+    auto &db = DatabaseManager::instance();
+    if (m_ocrModels.isEmpty()) {
+        m_products = db.searchProducts(m_currentCat, kw, dtype);
+    } else {
+        // 订单图片识别出多个型号：一次取回（沿用分类/图纸筛选），本地按型号集合
+        // 过滤并去重，所有型号的结果一起显示；客户端模式也只发一次请求。
+        QSet<QString> keys;
+        for (const QString &m : m_ocrModels)
+            keys.insert(OcrHelper::normalizeModelKey(m));
+        // 勾选「型号一致」只认完全相同；默认按包含匹配，OCR 截断或库中带
+        // -1 之类后缀的相近型号也一起显示出来。
+        const bool exactOnly = m_chkExactModel && m_chkExactModel->isChecked();
+        const QList<Product> pool = db.searchProducts(m_currentCat, QString(), dtype);
+        QSet<int> seen;
+        m_products.clear();
+        for (const Product &p : pool) {
+            if (!OcrHelper::modelHit(OcrHelper::normalizeModelKey(p.model), keys, exactOnly)
+                || seen.contains(p.id))
+                continue;
+            seen.insert(p.id);
+            m_products << p;
+        }
+        if (m_ocrResultLabel)
+            m_ocrResultLabel->setText(
+                QStringLiteral("OCR 识别到 %1 个型号，已自动搜索，匹配 %2 条记录（%3）")
+                    .arg(m_ocrModels.size()).arg(m_products.size())
+                    .arg(exactOnly ? QStringLiteral("型号一致")
+                                   : QStringLiteral("包含匹配，全部显示")));
+    }
+    if (m_ocrResultBar)
+        m_ocrResultBar->setVisible(!m_ocrModels.isEmpty());
 
     // 特有字段列：仅选中具体分类时按该分类配置显示。
     // 「所有类别」下不显示特有字段；分类没有的字段（如“开关”无软件版本号）也不会出现。
@@ -860,6 +1123,12 @@ void MainWindow::reloadTable()
             // 单元格内容统一居中
             auto *it = new QTableWidgetItem(text);
             it->setTextAlignment(Qt::AlignCenter);
+            if (!m_ocrModels.isEmpty()) {
+                // OCR 结果行淡绿底、型号列绿字
+                it->setBackground(QColor(67, 207, 124, 26));
+                if (c == 3)
+                    it->setForeground(QColor(0x63, 0xE6, 0xA8));
+            }
             m_table->setItem(r, c++, it);
         };
         set(QString::number(r + 1));
@@ -1059,7 +1328,7 @@ void MainWindow::showProductDetail(int productId)
         auto *it = new QListWidgetItem(m_moreDrawings);
         it->setData(Qt::UserRole, i);
         it->setText(QStringLiteral("图纸%1").arg(i + 1));
-        it->setTextAlignment(static_cast<int>(Qt::AlignHCenter | Qt::AlignTop));
+        it->setTextAlignment(Qt::AlignHCenter | Qt::AlignTop);
         it->setToolTip(QStringLiteral("%1\n%2\n%3")
                            .arg(QFileInfo(dg.filePath).fileName(),
                                 dg.dtype == TypeCountersign ? QStringLiteral("会签图")
@@ -1477,6 +1746,9 @@ void MainWindow::buildLoginOverlay()
 
 void MainWindow::updateLoginLabel()
 {
+    // 登录 / 退出 / 初始化都走这里：把登录态推给工具页，决定芯片查询能否增删改
+    if (m_toolsPage)
+        m_toolsPage->setLoggedIn(m_currentUser);
     if (!m_loginLabel) return;
     if (m_currentUser.isEmpty())
         m_loginLabel->setText(QStringLiteral("未登录　点击登录"));
@@ -1491,6 +1763,7 @@ void MainWindow::resizeEvent(QResizeEvent *event)
     if (m_pwdOverlay && m_pwdOverlay->isVisible())
         m_pwdOverlay->syncOverlay(); // 屏幕/窗口变化后重新贴合整块屏幕
     // 窗口尺寸变化后按强制比例重排左右两栏（普通 3:2、最大化/全屏 1:1）
+    positionOcrPopup(); // 右侧 OCR 浮层跟着窗口重新贴边
     QTimer::singleShot(0, this, [this] { applySplitRatio(); });
 }
 
@@ -1499,7 +1772,7 @@ void MainWindow::changeEvent(QEvent *event)
 {
     QWidget::changeEvent(event);
     if (event->type() == QEvent::WindowStateChange)
-        QTimer::singleShot(0, this, [this] { applySplitRatio(); });
+        QTimer::singleShot(0, this, [this] { applySplitRatio(); positionOcrPopup(); });
 }
 
 void MainWindow::applyStyle()

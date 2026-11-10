@@ -16,6 +16,7 @@ import androidx.navigation.NavHostController
 import android.net.Uri
 import com.houyawei.nddrawing.data.Drawing
 import com.houyawei.nddrawing.data.Repository
+import java.io.File
 
 @Composable
 fun ScanResultScreen(code: String, nav: NavHostController) {
@@ -23,6 +24,7 @@ fun ScanResultScreen(code: String, nav: NavHostController) {
     val info = remember { parseQr(Uri.decode(code)) }
     val product = remember { Repository.db.productByMaterialCode(info.materialCode) }
     val drawings = remember { product?.let { Repository.db.drawingsOf(it.id) } ?: emptyList() }
+    val sync = rememberProductDrawingSync(drawings)
     // 特有字段按分类配置显示，硬件/软件版本号不再作为固定行重复显示
     val extFields = remember(product?.id) { product?.let { displayedExtFields(it) } ?: emptyList() }
     var showAbout by remember { mutableStateOf(false) }
@@ -83,8 +85,15 @@ fun ScanResultScreen(code: String, nav: NavHostController) {
 
                 Spacer(Modifier.height(16.dp))
                 Text("图纸（${drawings.size}）", style = MaterialTheme.typography.titleMedium)
+                if (sync.status.isNotEmpty()) {
+                    Text(
+                        sync.status,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
-                drawings.forEach { d -> ScanDrawingItem(d) }
+                drawings.forEach { d -> ScanDrawingItem(d, sync.revision) }
             }
         }
     }
@@ -99,21 +108,30 @@ private fun InfoRow(label: String, value: String) {
 }
 
 @Composable
-private fun ScanDrawingItem(d: Drawing) {
+private fun ScanDrawingItem(d: Drawing, revision: Int) {
     val ctx = LocalContext.current
     val label = (if (d.dtype == 1) "会签图" else "下发图") +
             if (d.drawingDate.isNotEmpty()) "  ${d.drawingDate}" else ""
     var showViewer by remember { mutableStateOf(false) }
+    // 数据库没写 local_path 时，按 relPath 找刚从局域网补下来的文件
+    val path = localDrawingPath(d)
     Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Column(Modifier.fillMaxWidth().padding(12.dp)) {
             Text(label, style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(4.dp))
             if (d.format.equals("pdf", true)) {
-                OutlinedButton(onClick = { openPdf(ctx, d.localPath) }) {
-                    Text("打开 PDF：${d.fileName}")
+                if (File(path).exists()) {
+                    OutlinedButton(onClick = { openPdf(ctx, path) }) {
+                        Text("打开 PDF：${d.fileName}")
+                    }
+                } else {
+                    Text(
+                        "（PDF 未下载或文件缺失：${d.fileName}）",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             } else {
-                val bmp = remember(d.localPath) { loadBitmap(d.localPath) }
+                val bmp = remember(path, revision) { loadBitmap(path) }
                 if (bmp != null) {
                     Image(
                         bmp, contentDescription = d.fileName,
@@ -135,5 +153,5 @@ private fun ScanDrawingItem(d: Drawing) {
             }
         }
     }
-    if (showViewer) ImageViewerDialog(path = d.localPath, onClose = { showViewer = false })
+    if (showViewer) ImageViewerDialog(path = path, onClose = { showViewer = false })
 }

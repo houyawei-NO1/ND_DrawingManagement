@@ -3,8 +3,8 @@
     <Name>com.nd.ndmpc</Name>
     <DisplayName>图纸管理系统（PC 版）</DisplayName>
     <Description>包含程序本体、Qt 运行库与离线 OCR 引擎（PaddleOCR）。</Description>
-    <Version>1.2026.11.9</Version>
-    <ReleaseDate>2026-11-09</ReleaseDate>
+    <Version>1.2026.11.10</Version>
+    <ReleaseDate>2026-11-10</ReleaseDate>
     <Default>true</Default>
     <ForcedInstallation>true</ForcedInstallation>
     <Script>installscript.qs</Script>

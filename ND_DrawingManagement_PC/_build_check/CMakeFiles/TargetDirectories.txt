@@ -1,0 +1,5 @@
+E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/_build_check/CMakeFiles/ND_DrawingManagement_PC.dir
+E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/_build_check/CMakeFiles/edit_cache.dir
+E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/_build_check/CMakeFiles/rebuild_cache.dir
+E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/_build_check/CMakeFiles/ND_DrawingManagement_PC_autogen_timestamp_deps.dir
+E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/_build_check/CMakeFiles/ND_DrawingManagement_PC_autogen.dir

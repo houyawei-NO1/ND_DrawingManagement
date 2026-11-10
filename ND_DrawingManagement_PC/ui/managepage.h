@@ -10,6 +10,7 @@ class QTableWidget;
 class QResizeEvent;
 class MaterialCodeDialog;
 class QtyManageDialog;
+class ChangeLogDialog;
 
 // 管理页：修改产品 / 调整更改记录 / 删除、批量删除
 class ManagePage : public QWidget
@@ -43,6 +44,7 @@ private:
     QTableWidget *m_table = nullptr;
     MaterialCodeDialog *m_codePanel = nullptr; // 物料编码补充（遮罩卡片，与关于窗口同款）
     QtyManageDialog *m_qtyDialog = nullptr;     // 数量管理（全屏半透明黑框）
+    ChangeLogDialog *m_logDialog = nullptr;     // 更改记录（全屏半透明黑遮罩卡片）
 };
 
 #endif // MANAGEPAGE_H

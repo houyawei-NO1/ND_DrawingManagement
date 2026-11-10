@@ -9,6 +9,7 @@
 #include <QStringList>
 #include "model/product.h"
 #include "util/stocktypes.h"
+#include "util/chiptypes.h"
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -78,6 +79,7 @@ public:
     bool addDrawing(int productId, const QString &srcFile, int dtype,
                     const QDate &drawingDate, QString *err);
     bool updateDrawingMeta(int drawingId, int dtype, const QDate &drawingDate, QString *err);
+    bool deleteDrawing(int drawingId, QString *err);
     bool updateChangeLog(int id, const QString &content, QString *err);
     bool deleteChangeLog(int id);
     bool addFieldConfig(const QString &category, const QString &key,
@@ -90,6 +92,15 @@ public:
     // ---- ERP 库存档案（写入：整份表格 base64 上传到服务器）----
     bool importStockFile(const QString &srcPath, const QString &originalName, QString *err);
     bool deleteStockBatch(const QString &key, QString *err);
+
+    // ---- 芯片查询（只读 / 写入，与 DatabaseManager 同名方法对齐）----
+    QStringList chipHardwares(QString *err = nullptr) const;
+    QList<ChipItem> chipModelDict(QString *err = nullptr) const;
+    QList<ChipItem> chipSearch(const QString &mode, const QString &keyword,
+                               int limit, int *total = nullptr,
+                               QString *err = nullptr) const;
+    bool chipSave(ChipItem *item, QString *err);
+    bool chipDelete(int id, QString *err);
 
 private:
     explicit RemoteApiClient(QObject *parent = nullptr);

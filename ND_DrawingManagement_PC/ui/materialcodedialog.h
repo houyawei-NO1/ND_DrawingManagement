@@ -71,6 +71,7 @@ private:
 
     bool runOcr(const QString &path, QString *text);
     int parseAndAppend(const QString &text); // 返回未配对条数
+    void mergeDuplicateRows(bool logToRaw); // 跨图片合并同一物料编码，数量累加
     void rebuildTable();
 
     QWidget *m_card = nullptr;
@@ -92,6 +93,7 @@ private:
 
     Mode m_mode = MaterialCode;  // 当前模式
     bool m_embedded = false;     // true=内联嵌入（无遮罩、不点击关闭）
+    bool m_saving = false;       // 正在写库：拦截嵌套事件循环里的重复提交
 };
 
 #endif // MATERIALCODEDIALOG_H
