@@ -23,6 +23,7 @@
 #include <QPushButton>
 #include <QFileDialog>
 #include "ndmessagebox.h"
+#include "dataentrynotify.h"
 #include <QInputDialog>
 #include <QFile>
 #include <QFileInfo>
@@ -936,7 +937,7 @@ void SettingsDialog::buildRoleTab()
     QHBoxLayout *addr = new QHBoxLayout();
     addr->addWidget(new QLabel(QStringLiteral("服务器地址："), page));
     m_edtRoleHost = new QLineEdit(page);
-    m_edtRoleHost->setPlaceholderText(QStringLiteral("客户端填写服务器主机 IP 或计算机名"));
+    m_edtRoleHost->setPlaceholderText(QStringLiteral("客户端填写服务器 IP，默认 192.168.1.16"));
     m_edtRoleHost->setText(DatabaseManager::serverHost());
     addr->addWidget(m_edtRoleHost, 1);
     addr->addWidget(new QLabel(QStringLiteral("端口："), page));
@@ -1506,6 +1507,17 @@ void SettingsDialog::checkAutoBackup()
     pruneOldBackups();
     if (m_lblBackupStatus)
         m_lblBackupStatus->setText(QStringLiteral("自动备份完成：%1").arg(QFileInfo(dst).fileName()));
+
+    // 右下角无遮罩提示：只保留绿色「确 定」，无人处理时 10 分钟自动收起
+    DataEntryNotify::Options opt;
+    opt.title = QStringLiteral("自动备份完成");
+    opt.text = QStringLiteral("%1 数据库已自动备份。")
+                   .arg(QDateTime::currentDateTime().toString(QStringLiteral("HH:mm")));
+    opt.tip = QStringLiteral("备份文件：%1；10 分钟后自动关闭")
+                  .arg(QFileInfo(dst).fileName());
+    opt.showCancel = false;
+    opt.autoCloseMs = 10 * 60 * 1000;
+    DataEntryNotify::showMessage(opt);
 }
 
 void SettingsDialog::refreshOffline()

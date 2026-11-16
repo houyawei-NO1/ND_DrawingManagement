@@ -40,6 +40,8 @@ set(PROJECT_SOURCES
     ui/settingsdialog.cpp
     ui/toolspage.cpp
     ui/chipquerypage.cpp
+    ui/codeconvertpage.cpp
+    ui/dataentrynotify.cpp
     ui/updatedialog.cpp
     ui/materialcodedialog.cpp
     ui/ocrimagedrop.cpp
@@ -51,6 +53,7 @@ set(PROJECT_SOURCES
     server/lanhttpserver.cpp
     server/remoteapiclient.cpp
     server/updatemanager.cpp
+    util/singleinstance.cpp
     util/xlsreader.cpp
 )
 
@@ -59,6 +62,9 @@ set(PROJECT_HEADERS
     model/product.h
     util/stocktypes.h
     util/chiptypes.h
+    util/modelcodec.h
+    util/autostart.h
+    util/singleinstance.h
     util/xlsreader.h
     db/databasemanager.h
     image/heifconverter.h
@@ -67,6 +73,8 @@ set(PROJECT_HEADERS
     ui/settingsdialog.h
     ui/toolspage.h
     ui/chipquerypage.h
+    ui/codeconvertpage.h
+    ui/dataentrynotify.h
     ui/updatedialog.h
     ui/materialcodedialog.h
     ui/ocrhelper.h

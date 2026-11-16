@@ -12,6 +12,9 @@
 #include "ocrimagedrop.h"
 #include "ocrresultpopup.h"
 #include "ocrhelper.h"
+#include "util/modelcodec.h"
+#include "util/autostart.h"
+#include "util/singleinstance.h"
 
 #include <QCoreApplication>
 #include <QTimer>
@@ -58,8 +61,10 @@
 #include <QApplication>
 #include <QScreen>
 #include <QMenu>
+#include <QWidgetAction>
 #include <QAction>
 #include <QProcess>
+#include <QSystemTrayIcon>
 #include <QToolTip>
 #include <QCursor>
 #include <QDir>
@@ -88,6 +93,7 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent)
     resize(1400, 860);
 
     buildTitleBar();
+    buildSystemTray();
     buildCategoryTabs();
     buildToolBar();
     buildBody();
@@ -213,6 +219,13 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent)
     m_syncStatusLabel->setStyleSheet(QStringLiteral(
         "background:#22293C;color:#8a90a6;padding:6px 14px;font-size:13px;"));
 
+    // 状态栏中间：显示局域网内正在访问网页端的 IP（客户端模式下隐藏）
+    m_webStatusLabel = new QLabel(QStringLiteral("已连接网页端 IP：无"), this);
+    m_webStatusLabel->setObjectName(QStringLiteral("webStatus"));
+    m_webStatusLabel->setStyleSheet(QStringLiteral(
+        "background:#22293C;color:#8a90a6;padding:6px 14px;font-size:13px;"));
+    m_webStatusLabel->setVisible(DatabaseManager::isServer());
+
     // 状态栏右侧：服务器显示已连接客户端 IP（客户端模式下隐藏）
     m_clientStatusLabel = new QLabel(QStringLiteral("已连接客户端：无"), this);
     m_clientStatusLabel->setObjectName(QStringLiteral("clientStatus"));
@@ -220,7 +233,7 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent)
         "background:#22293C;color:#8a90a6;padding:6px 14px;font-size:13px;"));
     m_clientStatusLabel->setVisible(DatabaseManager::isServer());
 
-    // 状态栏底层横向布局：左=手机同步/客户端连接，右=已连接客户端 IP
+    // 状态栏底层横向布局：左=手机同步/客户端连接，中=网页端 IP，右=已连接客户端 IP
     QWidget *statusBar = new QWidget(this);
     statusBar->setObjectName(QStringLiteral("statusBar"));
     QHBoxLayout *sbl = new QHBoxLayout(statusBar);
@@ -228,12 +241,23 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent)
     sbl->setSpacing(0);
     sbl->addWidget(m_syncStatusLabel);
     sbl->addStretch(1);
+    sbl->addWidget(m_webStatusLabel);
+    sbl->addStretch(1);
     sbl->addWidget(m_clientStatusLabel);
     root->addWidget(statusBar);
 
     m_syncTimer = new QTimer(this);
     connect(m_syncTimer, &QTimer::timeout, this, &MainWindow::refreshSyncStatus);
     m_syncTimer->start(1000);
+
+    // 每日数量录入提醒：每分钟检查是否「刚跨过」设定时刻。
+    // 启动晚于设定时刻不再补弹，避免每次打开程序都弹通知。
+    m_lastNotifyCheck = QDateTime::currentDateTime();
+    m_notifyTimer = new QTimer(this);
+    m_notifyTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_notifyTimer, &QTimer::timeout, this, &MainWindow::checkDailyQtyNotify);
+    m_notifyTimer->start(60 * 1000);
+    QTimer::singleShot(3000, this, &MainWindow::checkDailyQtyNotify);
 }
 
 MainWindow::~MainWindow()
@@ -244,6 +268,13 @@ MainWindow::~MainWindow()
     // “Called object is not the correct type (class destructor may have already run)”。
     if (m_syncTimer)
         m_syncTimer->stop();
+    if (m_notifyTimer)
+        m_notifyTimer->stop();
+    // 通知是独立顶层窗口，不是本窗口子对象，退出时需显式回收
+    if (m_notify) {
+        m_notify->disconnect();
+        delete m_notify.data();
+    }
     const QList<QObject *> kids = findChildren<QObject *>();
     for (QObject *o : kids)
         disconnect(o, nullptr, this, nullptr);
@@ -295,25 +326,45 @@ void MainWindow::buildTitleBar()
     lay->addWidget(logo);
     lay->addWidget(title);
 
-    // 顶部菜单：主界面 / 录入 / 管理 / 设置 / 工具（沿用电器盒检测工程风格）
+    // 顶部菜单：主界面 / 库存 / 工具 / 录入 / 管理 / 设置。
+    // 按钮组 id 必须与 m_stack 页索引一致（0主界面 1录入 2管理 3设置 4工具）：
+    // 登录验证、通知跳转等多处用 button(m_stack->currentIndex()) 恢复选中态，
+    // 因此这里的显示顺序与 id 无关；「库存」不进按钮组，只负责打开浏览器。
     QHBoxLayout *menuLay = new QHBoxLayout();
-    menuLay->setSpacing(30);
+    menuLay->setSpacing(24);
     menuLay->setContentsMargins(50, 0, 0, 0);
     m_menuGroup = new QButtonGroup(this);
     m_menuGroup->setExclusive(true);
-    const QStringList menus = {QStringLiteral("主界面"), QStringLiteral("录入"),
-                               QStringLiteral("管理"), QStringLiteral("设置"), QStringLiteral("工具")};
-    for (int i = 0; i < menus.size(); ++i) {
-        QPushButton *b = new QPushButton(menus.at(i), bar);
+    auto addMenuButton = [this, bar, menuLay](const QString &text, int pageId) {
+        QPushButton *b = new QPushButton(text, bar);
         b->setObjectName(QStringLiteral("menuBtn"));
         b->setFixedSize(80, 60);
-        b->setCheckable(true);
+        b->setCheckable(pageId >= 0);
         b->setFocusPolicy(Qt::NoFocus);
         b->setCursor(Qt::PointingHandCursor);
-        m_menuGroup->addButton(b, i);
+        if (pageId >= 0) {
+            m_menuGroup->addButton(b, pageId);
+            if (pageId == 0) b->setChecked(true);
+        } else {
+            b->setToolTip(QStringLiteral("在浏览器中打开网页端库存页面"));
+            connect(b, &QPushButton::clicked, this, [this]() {
+                if (m_accessUrl.isEmpty()) {
+                    NdMessageBox::information(this, QStringLiteral("网页端库存"),
+                        QStringLiteral("尚未获取到网页服务地址，请确认服务器程序已运行、客户端已配置服务器地址。"));
+                    return;
+                }
+                // 网页端已支持 /?page=stock 直达库存页（自动切页并加载库存清单）
+                QDesktopServices::openUrl(QUrl(m_accessUrl + QStringLiteral("/?page=stock")));
+            });
+        }
         menuLay->addWidget(b, 0, Qt::AlignHCenter);
-        if (i == 0) b->setChecked(true);
-    }
+    };
+    addMenuButton(QStringLiteral("主界面"), 0);
+    addMenuButton(QStringLiteral("库存"), -1);
+    addMenuButton(QStringLiteral("工具"), 4);
+    addMenuButton(QStringLiteral("录入"), 1);
+    addMenuButton(QStringLiteral("管理"), 2);
+    addMenuButton(QStringLiteral("设置"), 3);
     lay->addLayout(menuLay);
     lay->addStretch();
 
@@ -425,7 +476,51 @@ void MainWindow::buildTitleBar()
     connect(btnMax, &QPushButton::clicked, this, [this] {
         isMaximized() ? showNormal() : showMaximized();
     });
-    connect(btnClose, &QPushButton::clicked, this, &QWidget::close);
+    connect(btnClose, &QPushButton::clicked, this, [this] {
+        // 只隐藏界面：网页端、自动备份、数据录入提醒等后台任务继续运行
+        if (!m_tray) { // 极少数系统无托盘：无法从后台恢复，退化为正常退出
+            qApp->quit();
+            return;
+        }
+        hide();
+        m_tray->showMessage(QStringLiteral("南都图纸管理"),
+            QStringLiteral("已隐藏到后台运行，点击托盘图标可重新打开界面。"),
+            QSystemTrayIcon::Information, 3000);
+    });
+}
+
+void MainWindow::buildSystemTray()
+{
+    if (!QSystemTrayIcon::isSystemTrayAvailable())
+        return;
+
+    QMenu *menu = new QMenu(this);
+    QAction *showAct = menu->addAction(QStringLiteral("显示主界面"));
+    connect(showAct, &QAction::triggered, this, &MainWindow::showMainWindow);
+    menu->addSeparator();
+    QAction *quitAct = menu->addAction(QStringLiteral("退出程序"));
+    connect(quitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
+
+    m_tray = new QSystemTrayIcon(this);
+    m_tray->setIcon(QIcon(QStringLiteral(":/image/logo.png")));
+    m_tray->setToolTip(QStringLiteral("南都图纸管理（后台运行中）"));
+    m_tray->setContextMenu(menu);
+    connect(m_tray, &QSystemTrayIcon::activated, this,
+            [this](QSystemTrayIcon::ActivationReason reason) {
+                if (reason == QSystemTrayIcon::Trigger
+                    || reason == QSystemTrayIcon::DoubleClick)
+                    showMainWindow();
+            });
+    m_tray->show();
+}
+
+void MainWindow::showMainWindow()
+{
+    if (isMinimized())
+        showNormal();
+    show();
+    raise();
+    activateWindow();
 }
 
 // 取局域网 IPv4 地址（排除回环与链路本地 169.254.*）
@@ -438,7 +533,7 @@ static QString lanIpAddress()
             && !a.isInSubnet(QHostAddress(QStringLiteral("169.254.0.0")), 16))
             return a.toString();
     }
-    return QStringLiteral("127.0.0.1");
+    return QStringLiteral("192.168.1.16");
 }
 
 void MainWindow::updateServerInfo()
@@ -475,6 +570,19 @@ void MainWindow::refreshSyncStatus()
         return;
     }
     if (!m_httpServer) return;
+
+    // 中间状态条：已连接网页端 IP（近 2 分钟内有网页请求即视为在线）
+    const QStringList webIps = m_httpServer->webClients();
+    if (webIps.isEmpty()) {
+        m_webStatusLabel->setText(QStringLiteral("已连接网页端 IP：无"));
+        m_webStatusLabel->setStyleSheet(
+            "background:#22293C;color:#8a90a6;padding:6px 14px;font-size:13px;");
+    } else {
+        m_webStatusLabel->setText(QStringLiteral("已连接网页端 IP（%1）：%2")
+                                      .arg(webIps.size()).arg(webIps.join(QStringLiteral("，"))));
+        m_webStatusLabel->setStyleSheet(
+            "background:#1E3B2C;color:#43CF7C;padding:6px 14px;font-size:13px;");
+    }
 
     // 右侧状态条：已连接客户端（近 2 分钟有活动即视为在线）
     const QList<LanHttpServer::ClientConn> cls = m_httpServer->clients();
@@ -1120,9 +1228,12 @@ void MainWindow::reloadTable()
         const Product &p = m_products.at(r);
         int c = 0;
         auto set = [&](const QString &text) {
-            // 单元格内容统一居中
+            // 备注是最后一列，文字较长，左对齐便于阅读；其余列保持居中
             auto *it = new QTableWidgetItem(text);
-            it->setTextAlignment(Qt::AlignCenter);
+            if (c == headers.size() - 1)
+                it->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+            else
+                it->setTextAlignment(Qt::AlignCenter);
             if (!m_ocrModels.isEmpty()) {
                 // OCR 结果行淡绿底、型号列绿字
                 it->setBackground(QColor(67, 207, 124, 26));
@@ -1216,7 +1327,8 @@ void MainWindow::onTableDoubleClicked(int row, int column)
     QToolTip::showText(QCursor::pos(), QStringLiteral("已复制整行数据"), m_table);
 }
 
-// 右键表格：选中该行，并可按列复制对应的单元格数据
+// 右键表格：选中该行，并可按列复制对应的单元格数据。
+// 右击哪一列，该列的「复制」就紧跟在「复制整行数据」之后；型号列后面额外提供转换编码型号。
 void MainWindow::onTableContextMenu(const QPoint &pos)
 {
     Q_UNUSED(pos); // 统一以鼠标全局位置换算，避免不同平台坐标系差异
@@ -1225,46 +1337,130 @@ void MainWindow::onTableContextMenu(const QPoint &pos)
     if (row < 0 || row >= m_table->rowCount()) return;
     const int clickedCol = m_table->columnAt(vp.x());
 
-    // 右键同时选中该行，右侧详情/预览随之刷新
+    // 只立即选中该行；详情/预览和编码转换都等菜单弹出后再刷新，
+    // 避免加载图纸缩略图或计算转换时卡住菜单的出现
     m_table->selectRow(row);
-    if (row < m_products.size())
-        onRowSelected(row, qMax(0, clickedCol));
 
+    const int cols = m_table->columnCount();
+    struct ColEntry {
+        QAction *copy = nullptr;
+        QAction *converted = nullptr; // 仅型号列：复制转换编码型号
+    };
     RoundedMenu menu(this);
     QAction *aRow = menu.addAction(QStringLiteral("复制整行数据"));
-    menu.addSeparator();
-    QList<QAction *> colActs;
-    for (int c = 0; c < m_table->columnCount(); ++c) {
+
+    QList<ColEntry> entries;
+    entries.reserve(cols);
+    int modelCol = -1;
+    for (int c = 0; c < cols; ++c) {
         const QTableWidgetItem *h = m_table->horizontalHeaderItem(c);
         const QString name = h ? h->text() : QString::number(c + 1);
-        QAction *a = menu.addAction(QStringLiteral("复制「%1」").arg(name));
+        ColEntry e;
+        e.copy = new QAction(QStringLiteral("复制「%1」").arg(name), &menu);
         if (c == clickedCol) { // 高亮当前右键所在列
-            QFont f = a->font();
+            QFont f = e.copy->font();
             f.setBold(true);
-            a->setFont(f);
+            e.copy->setFont(f);
         }
-        colActs << a;
+        if (name == QStringLiteral("型号")) {
+            modelCol = c;
+            e.converted = new QAction(QStringLiteral("复制转换编码型号"), &menu);
+        }
+        entries << e;
     }
+
+    // 转换结果等菜单弹出后再算；预览行先隐藏，算出来能转换才显示
+    QString convertedModel, convertErr;
+    bool convertDone = false;
+    auto addColumn = [&](int c) {
+        menu.addAction(entries.at(c).copy);
+        if (entries.at(c).converted) {
+            auto *preview = new QWidgetAction(&menu);
+            preview->setObjectName(QStringLiteral("codecMenuPreview"));
+            auto *lb = new QLabel();
+            // 背景取菜单同色，避免全局 QWidget 底色把预览行画成一块方块
+            lb->setStyleSheet(QStringLiteral(
+                "background:#22293C;color:#8CE0B7;font-size:12px;font-weight:bold;"
+                "padding:4px 26px 4px 18px;"));
+            lb->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+            preview->setDefaultWidget(lb);
+            preview->setVisible(false);
+            menu.addAction(preview);
+            menu.addAction(entries.at(c).converted);
+        }
+    };
+    // 右击列提到第二行，其余列保持原顺序；型号列的转换项始终紧跟在它后面
+    if (clickedCol >= 0 && clickedCol < cols)
+        addColumn(clickedCol);
+    menu.addSeparator();
+    for (int c = 0; c < cols; ++c)
+        if (c != clickedCol)
+            addColumn(c);
+
+    // exec() 进入事件循环后立刻刷新预览：菜单已经显示，计算不再拖慢弹出
+    QTimer::singleShot(0, &menu, [this, row, modelCol, &convertedModel, &convertErr,
+                                  &convertDone, &menu]() {
+        if (modelCol < 0)
+            return;
+        const QTableWidgetItem *mi = m_table->item(row, modelCol);
+        convertedModel = ModelCode::convert(mi ? mi->text() : QString(), &convertErr);
+        convertDone = true;
+        if (convertedModel.isEmpty())
+            return; // 不符合规则就不显示预览行
+        auto *preview = menu.findChild<QWidgetAction *>(QStringLiteral("codecMenuPreview"));
+        if (!preview)
+            return;
+        if (auto *lb = qobject_cast<QLabel *>(preview->defaultWidget()))
+            lb->setText(QStringLiteral("转换后：%1").arg(convertedModel));
+        preview->setVisible(true);
+    });
+    // 详情/图纸预览单独延迟，挂在 MainWindow 上：菜单被立刻关掉也照样刷新
+    QTimer::singleShot(0, this, [this, row, clickedCol]() {
+        if (row < m_products.size())
+            onRowSelected(row, qMax(0, clickedCol));
+    });
 
     QAction *chosen = menu.exec(QCursor::pos());
     if (!chosen) return;
 
     QString text;
+    QString tip = QStringLiteral("已复制");
     if (chosen == aRow) {
         QStringList cells;
-        for (int c = 0; c < m_table->columnCount(); ++c) {
+        for (int c = 0; c < cols; ++c) {
             const QTableWidgetItem *it = m_table->item(row, c);
             cells << (it ? it->text() : QString());
         }
         text = cells.join(QChar('\t'));
+        tip = QStringLiteral("已复制整行数据");
+    } else if (modelCol >= 0 && chosen == entries.at(modelCol).converted) {
+        // 极快点击时异步刷新可能还没跑，这里补算一次（纯字符串计算，耗时可忽略）
+        if (!convertDone) {
+            const QTableWidgetItem *it = m_table->item(row, modelCol);
+            convertedModel = ModelCode::convert(it ? it->text() : QString(), &convertErr);
+            convertDone = true;
+        }
+        if (convertedModel.isEmpty()) {
+            // 不符合规则时直接弹窗：全屏黑色半透明遮罩 + 深色卡片，与全局提示一致
+            NdMessageBox::warning(this, QStringLiteral("编码转换"),
+                convertErr.isEmpty()
+                    ? QStringLiteral("该型号无法按规则转换，本规则仅适用于中小拖型号。")
+                    : convertErr);
+            return;
+        }
+        text = convertedModel;
+        tip = QStringLiteral("已复制转换编码型号");
     } else {
-        const int c = colActs.indexOf(chosen);
+        int c = -1;
+        for (int i = 0; i < cols; ++i) {
+            if (chosen == entries.at(i).copy) { c = i; break; }
+        }
         if (c < 0) return;
         const QTableWidgetItem *it = m_table->item(row, c);
         text = it ? it->text() : QString();
     }
     QGuiApplication::clipboard()->setText(text);
-    QToolTip::showText(QCursor::pos(), QStringLiteral("已复制"), m_table);
+    QToolTip::showText(QCursor::pos(), tip, m_table);
 }
 
 // 补充信息：把已有数据带入录入页（编辑模式），保存后更新修改时间
@@ -1607,7 +1803,11 @@ void MainWindow::restartApplication()
     QTimer::singleShot(200, qApp, [this] {
         const QString exe = QCoreApplication::applicationFilePath();
         const QStringList args = QCoreApplication::arguments().mid(1);
+        // 新进程启动那一刻旧进程尚未退出，先释放单实例监听，
+        // 否则新进程会被判定为「第二个实例」而只唤醒旧窗口、自己退出
+        SingleInstanceGuard::instance().release();
         if (!QProcess::startDetached(exe, args)) {
+            SingleInstanceGuard::instance().acquire(); // 重启失败：恢复监听
             m_restarting = false;
             show();
             NdMessageBox::warning(this, QStringLiteral("重启失败"),
@@ -1703,10 +1903,13 @@ void MainWindow::buildLoginOverlay()
         m_entryPage->setCurrentUser(user);
         updateLoginLabel();
 
-        if (m_pwdTargetPage == 1) {
+        if (m_pwdTargetPage == 1 || m_pwdTargetPage == 4) {
             m_entryPage->resetForm();
             m_stack->setCurrentIndex(1);
             m_menuGroup->button(1)->setChecked(true);
+            // 每日通知点「确 定」但未登录：验证通过后直接落在数量录入 Tab
+            if (m_pwdTargetPage == 4)
+                m_entryPage->switchToQuantityEntry();
         } else if (m_pwdTargetPage == 2) {
             m_managePage->refresh();
             m_stack->setCurrentIndex(2);
@@ -1768,6 +1971,85 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 }
 
 // 最大化/还原切换可能不改变控件尺寸，这里补一次比例重排
+// 每日通知点「确 定」：唤起主窗口并进入「录入 → 数量录入」
+void MainWindow::openQuantityEntry()
+{
+    if (isMinimized())
+        showNormal();
+    show();
+    raise();
+    activateWindow();
+
+    // 未登录时复用录入页的验证流程，doLogin 里按目标页 4 切到数量录入 Tab
+    if (m_currentUser.isEmpty()) {
+        m_pwdTargetPage = 4;
+        m_pwdTitle->setText(QStringLiteral("录入验证"));
+        m_userEdit->clear();
+        m_pwdEdit->clear();
+        m_pwdError->clear();
+        m_pwdOverlay->showOverlay();
+        m_userEdit->setFocus();
+        m_menuGroup->button(m_stack->currentIndex())->setChecked(true);
+        return;
+    }
+
+    m_entryPage->resetForm();
+    m_stack->setCurrentIndex(1);
+    m_menuGroup->button(1)->setChecked(true);
+    m_entryPage->switchToQuantityEntry();
+}
+
+void MainWindow::showDailyQtyNotify()
+{
+    if (m_notify) { // 同一天不叠加多个提醒
+        m_notify->hide();
+        m_notify->deleteLater();
+    }
+    DataEntryNotify::Options opt;
+    opt.title = QStringLiteral("数据录入通知");
+    opt.text = QStringLiteral("是否录入微信群内最新每日数量？");
+    opt.tip = QStringLiteral("点击「确 定」直接进入数量录入窗口");
+    opt.showCancel = true;
+    // 顶层独立窗口：主窗口隐藏到后台时通知依然能弹出
+    DataEntryNotify *notify = new DataEntryNotify(opt, nullptr);
+    m_notify = notify;
+    connect(notify, &DataEntryNotify::accepted,
+            this, &MainWindow::openQuantityEntry);
+    notify->showAtBottomRight();
+}
+
+void MainWindow::checkDailyQtyNotify()
+{
+    const QDateTime now = QDateTime::currentDateTime();
+    const QDateTime prev = m_lastNotifyCheck;
+    m_lastNotifyCheck = now;
+
+    QSettings s;
+    if (!s.value(AutoStart::notifyEnabledKey(), true).toBool())
+        return;
+    if (!prev.isValid())
+        return;
+
+    const QTime target = AutoStart::configuredNotifyTime();
+    QDateTime due = now;
+    due.setTime(target);
+    // 只在「上次检查还在设定时刻之前、本次已到或超过设定时刻」时提醒：
+    // 启动晚于设定时刻不再补弹（这就是以前每次重开程序都弹通知的原因），
+    // 系统睡眠后恢复检查仍能补上当次提醒。
+    if (!(prev < due && now >= due))
+        return;
+
+    // 按「日期 + 设定时刻」去重：改了提醒时间，当天仍可按新时刻再提醒一次
+    const QString stamp = now.date().toString(Qt::ISODate) + QStringLiteral(" ")
+                        + target.toString(QStringLiteral("HH:mm"));
+    if (s.value(AutoStart::notifyStampKey()).toString() == stamp)
+        return;
+
+    s.setValue(AutoStart::notifyStampKey(), stamp);
+    s.sync();
+    showDailyQtyNotify();
+}
+
 void MainWindow::changeEvent(QEvent *event)
 {
     QWidget::changeEvent(event);
@@ -1779,7 +2061,11 @@ void MainWindow::applyStyle()
 {
     qApp->setStyleSheet(QStringLiteral(R"(
 QWidget { background:#2B3046; color:#ffffff; font-size:14px; }
-#titleBar { background:#2B3046; }
+/* 标题栏与表格表头同色（QHeaderView::section 的 #22293C），
+   比主体 #2B3046 更深，和网页端 header/body 一样形成上下层次 */
+#titleBar { background:#22293C; }
+/* 标题栏内的子控件保持透明，避免全局 QWidget 背景盖住深色标题栏 */
+#titleBar QWidget { background:transparent; }
 /* 菜单栏下方浅灰细线：所有页面共用 */
 #titleLine { background:rgba(255,255,255,0.08); border:none; }
 /* 标题栏右侧信息列：登录状态 / 服务器地址 / 版本号

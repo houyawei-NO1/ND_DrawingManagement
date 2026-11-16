@@ -525,6 +525,11 @@ void EntryDialog::switchToProductEntry()
     setEntryTab(0);
 }
 
+void EntryDialog::switchToQuantityEntry()
+{
+    setEntryTab(1);
+}
+
 EntryDialog::~EntryDialog()
 {
     // 同 MainWindow：子控件（分类下拉框）析构发出的信号不再投递到已析构的 EntryDialog

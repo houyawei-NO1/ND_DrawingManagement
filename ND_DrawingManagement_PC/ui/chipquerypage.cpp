@@ -1,6 +1,7 @@
 #include "chipquerypage.h"
 #include "db/databasemanager.h"
 #include "ui/ndmessagebox.h"
+#include "roundedmenu.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -17,6 +18,13 @@
 #include <QMap>
 #include <QStringList>
 #include <QColor>
+#include <QAction>
+#include <QClipboard>
+#include <QCursor>
+#include <QFont>
+#include <QGuiApplication>
+#include <QMenu>
+#include <QToolTip>
 #include <algorithm>
 
 namespace {
@@ -174,6 +182,7 @@ void ChipQueryPage::buildUi()
     for (int i = 0; i < 8; ++i)
         m_table->setHorizontalHeaderItem(i, new QTableWidgetItem(kHeaders[i]));
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_table->setContextMenuPolicy(Qt::CustomContextMenu);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->verticalHeader()->setVisible(false);
@@ -299,6 +308,8 @@ void ChipQueryPage::buildUi()
             this, &ChipQueryPage::onBrandPicked);
     connect(m_table, &QTableWidget::cellDoubleClicked,
             this, &ChipQueryPage::onCellDoubleClicked);
+    connect(m_table, &QTableWidget::customContextMenuRequested,
+            this, &ChipQueryPage::onTableContextMenu);
 
     onSetMode(true);
     setLoggedIn(QString());
@@ -560,6 +571,67 @@ void ChipQueryPage::onCellDoubleClicked(int row, int column)
         m_edtKeyword->setText(m_items.at(row).hardware);
         onSetMode(true);
     }
+}
+
+// 右键菜单与主界面一致：第一项复制整行，第二项是右击所在列（加粗），
+// 分隔线之后按表头顺序列出其余各列的复制项。
+void ChipQueryPage::onTableContextMenu(const QPoint &pos)
+{
+    Q_UNUSED(pos); // 统一用鼠标全局位置换算，避免坐标系差异
+    const QPoint vp = m_table->viewport()->mapFromGlobal(QCursor::pos());
+    const int row = m_table->rowAt(vp.y());
+    const int col = m_table->columnAt(vp.x());
+    if (row < 0 || row >= m_table->rowCount())
+        return;
+    m_table->selectRow(row);
+
+    const int cols = m_table->columnCount();
+    RoundedMenu menu(this);
+    QAction *actRow = menu.addAction(QStringLiteral("复制整行数据"));
+    QList<QAction *> colActs;
+    colActs.reserve(cols);
+    for (int c = 0; c < cols; ++c) {
+        const QTableWidgetItem *h = m_table->horizontalHeaderItem(c);
+        const QString name = h ? h->text() : QString::number(c + 1);
+        QAction *a = new QAction(QStringLiteral("复制「%1」").arg(name), &menu);
+        if (c == col) {
+            QFont f = a->font();
+            f.setBold(true);
+            a->setFont(f);
+        }
+        colActs << a;
+    }
+    if (col >= 0 && col < cols)
+        menu.addAction(colActs.at(col));
+    menu.addSeparator();
+    for (int c = 0; c < cols; ++c)
+        if (c != col)
+            menu.addAction(colActs.at(c));
+
+    QAction *picked = menu.exec(QCursor::pos());
+    if (!picked)
+        return;
+
+    QString text, tip;
+    if (picked == actRow) {
+        QStringList cells;
+        for (int c = 0; c < cols; ++c) {
+            const QTableWidgetItem *it = m_table->item(row, c);
+            cells << (it ? it->text() : QString());
+        }
+        text = cells.join(QChar('\t')); // 制表符分隔，可直接粘贴到 Excel
+        tip = QStringLiteral("已复制整行数据");
+    } else {
+        const int c = colActs.indexOf(picked);
+        if (c < 0)
+            return;
+        const QTableWidgetItem *it = m_table->item(row, c);
+        const QTableWidgetItem *h = m_table->horizontalHeaderItem(c);
+        text = it ? it->text() : QString();
+        tip = QStringLiteral("已复制「%1」").arg(h ? h->text() : QString());
+    }
+    QGuiApplication::clipboard()->setText(text);
+    QToolTip::showText(QCursor::pos(), tip, m_table);
 }
 
 void ChipQueryPage::openEditor(const ChipItem &item, bool isNew)

@@ -44,6 +44,7 @@ public:
     void loadProduct(int id); // 载入已有产品进入编辑模式（管理页跳转）
     void setCurrentUser(const QString &name); // 设置当前登录用户（录入人自动填）
     void switchToProductEntry(); // 切到「产品录入」子菜单（补充信息 / 修改入口）
+    void switchToQuantityEntry(); // 切到「数量录入」子菜单（每日数据录入通知入口）
 
 signals:
     void saved();       // 保存成功

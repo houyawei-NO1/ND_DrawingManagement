@@ -425,6 +425,18 @@
 			null
 		],
 		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/codeconvertpage.h",
+			"MU",
+			"UYX5XTB5RZ/moc_codeconvertpage.cpp",
+			null
+		],
+		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/dataentrynotify.h",
+			"MU",
+			"UYX5XTB5RZ/moc_dataentrynotify.cpp",
+			null
+		],
+		[
 			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/entrydialog.h",
 			"MU",
 			"UYX5XTB5RZ/moc_entrydialog.cpp",
@@ -515,9 +527,27 @@
 			null
 		],
 		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/autostart.h",
+			"MU",
+			"KH43KSYMFX/moc_autostart.cpp",
+			null
+		],
+		[
 			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/chiptypes.h",
 			"MU",
 			"KH43KSYMFX/moc_chiptypes.cpp",
+			null
+		],
+		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/modelcodec.h",
+			"MU",
+			"KH43KSYMFX/moc_modelcodec.cpp",
+			null
+		],
+		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/singleinstance.h",
+			"MU",
+			"KH43KSYMFX/moc_singleinstance.cpp",
 			null
 		],
 		[
@@ -661,6 +691,16 @@
 			null
 		],
 		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/codeconvertpage.cpp",
+			"MU",
+			null
+		],
+		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/dataentrynotify.cpp",
+			"MU",
+			null
+		],
+		[
 			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/entrydialog.cpp",
 			"MU",
 			null
@@ -717,6 +757,11 @@
 		],
 		[
 			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/updatedialog.cpp",
+			"MU",
+			null
+		],
+		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/singleinstance.cpp",
 			"MU",
 			null
 		],

@@ -3,6 +3,8 @@
 #include "ORNZQ2F6DW/moc_lanhttpserver.cpp"
 #include "ORNZQ2F6DW/moc_remoteapiclient.cpp"
 #include "UYX5XTB5RZ/moc_chipquerypage.cpp"
+#include "UYX5XTB5RZ/moc_codeconvertpage.cpp"
+#include "UYX5XTB5RZ/moc_dataentrynotify.cpp"
 #include "UYX5XTB5RZ/moc_entrydialog.cpp"
 #include "UYX5XTB5RZ/moc_mainwindow.cpp"
 #include "UYX5XTB5RZ/moc_managepage.cpp"
@@ -14,3 +16,4 @@
 #include "UYX5XTB5RZ/moc_settingsdialog.cpp"
 #include "UYX5XTB5RZ/moc_toolspage.cpp"
 #include "UYX5XTB5RZ/moc_updatedialog.cpp"
+#include "KH43KSYMFX/moc_singleinstance.cpp"

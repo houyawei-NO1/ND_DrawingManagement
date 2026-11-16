@@ -70,7 +70,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
         scope.launch {
             when (val r = AppUpdate.check(ctx)) {
                 is AppUpdate.CheckResult.NoServer ->
-                    status = "未配置服务器地址。请先在「设置 → 数据同步」填写电脑端 IP，并连接同一局域网。"
+                    status = "未配置服务器地址。请先在「设置 → 数据同步」填写服务器IP，并连接同一局域网。"
                 is AppUpdate.CheckResult.NoPackage ->
                     status = "服务器上还没有手机安装包，请先在电脑端「设置 → 版本管理」上传 APK。"
                 is AppUpdate.CheckResult.Error ->

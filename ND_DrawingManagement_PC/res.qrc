@@ -3,6 +3,7 @@
         <file>logo.png</file>
         <file>logo.ico</file>
         <file>arrow_down.svg</file>
+        <file>apkqr.png</file>
     </qresource>
     <qresource prefix="/">
         <file>data/chip_seed.json</file>

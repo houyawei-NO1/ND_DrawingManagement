@@ -1427,7 +1427,9 @@ void MaterialCodeDialog::onApply()
             // 数量：为空直接写；已有数量需勾选「覆盖已有数量」（默认已勾选）
             if (r.qty > 0 && (p.qty == 0 || overwrite)) {
                 QString err;
-                if (db.updateQuantities(r.productId, r.qty, p.minQty, p.maxQty, &err)) {
+                // 库存同步只是附带动作，不再单独记「修改库存数量」；
+                // 日志只由 addQtyLog 记一条「录入每日数量」或「修改每日数量」
+                if (db.updateQuantities(r.productId, r.qty, p.minQty, p.maxQty, &err, false)) {
                     ++qtyUpdated;
                     didSth = true;
                     // 按「所选日期」判断是否已录过这个数量：同一天重复应用不重复记，

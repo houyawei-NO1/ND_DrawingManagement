@@ -11,6 +11,8 @@ class QComboBox;
 class QTableWidget;
 class QLineEdit;
 class QLabel;
+class QCheckBox;
+class QTimeEdit;
 
 // 工具页：子菜单沿用设置页的 QTabWidget 风格，包含「库存查询」和「关于」
 class ToolsPage : public QWidget
@@ -52,6 +54,11 @@ private:
 
     // 芯片查询
     ChipQueryPage *m_chipPage = nullptr;
+
+    // 关于页：开机启动、每日数据录入通知
+    QCheckBox *m_chkAutoRun = nullptr;
+    QCheckBox *m_chkDailyNotify = nullptr;
+    QTimeEdit *m_edtNotifyTime = nullptr;
 };
 
 #endif // TOOLSPAGE_H

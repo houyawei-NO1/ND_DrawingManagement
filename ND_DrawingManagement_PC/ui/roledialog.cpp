@@ -96,7 +96,7 @@ RoleSelectDialog::RoleSelectDialog(const RoleChoice &current, QWidget *parent)
     QHBoxLayout *addr = new QHBoxLayout();
     addr->addWidget(new QLabel(QStringLiteral("服务器地址："), card));
     m_edtHost = new QLineEdit(card);
-    m_edtHost->setPlaceholderText(QStringLiteral("例如 192.168.1.10 或服务器计算机名"));
+    m_edtHost->setPlaceholderText(QStringLiteral("例如 192.168.1.16 或服务器计算机名"));
     m_edtHost->setText(current.host);
     addr->addWidget(m_edtHost, 1);
     addr->addWidget(new QLabel(QStringLiteral("端口："), card));

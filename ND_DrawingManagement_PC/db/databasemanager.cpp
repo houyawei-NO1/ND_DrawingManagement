@@ -92,7 +92,9 @@ bool DatabaseManager::isServer()
 
 QString DatabaseManager::serverHost()
 {
-    return QSettings().value(QStringLiteral("server/host"), QString()).toString().trimmed();
+    // 客户端模式默认连接 192.168.1.16；用户仍可在「设置 → 本机角色 / 服务器连接」修改
+    return QSettings().value(QStringLiteral("server/host"),
+                             QStringLiteral("192.168.1.16")).toString().trimmed();
 }
 
 void DatabaseManager::setServerHost(const QString &host)
@@ -1457,10 +1459,12 @@ bool DatabaseManager::updateMaterialCode(int productId, const QString &code, QSt
     return true;
 }
 
-bool DatabaseManager::updateQuantities(int productId, int qty, int minQty, int maxQty, QString *err)
+bool DatabaseManager::updateQuantities(int productId, int qty, int minQty, int maxQty,
+                                       QString *err, bool logOp)
 {
     if (!isServer())
-        return RemoteApiClient::instance().updateQuantities(productId, qty, minQty, maxQty, err);
+        return RemoteApiClient::instance().updateQuantities(
+            productId, qty, minQty, maxQty, err, logOp);
     const Product old = productById(productId);
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
@@ -1474,11 +1478,13 @@ bool DatabaseManager::updateQuantities(int productId, int qty, int minQty, int m
         if (err) *err = q.lastError().text();
         return false;
     }
-    QJsonArray rows;
-    rows.append(opRow(QStringLiteral("数量"), QString::number(old.qty), QString::number(qty)));
-    rows.append(opRow(QStringLiteral("最小数量"), QString::number(old.minQty), QString::number(minQty)));
-    rows.append(opRow(QStringLiteral("最大数量"), QString::number(old.maxQty), QString::number(maxQty)));
-    addOpLog(QStringLiteral("修改库存数量"), old.model, old.name, opRowsJson(rows));
+    if (logOp) {
+        QJsonArray rows;
+        rows.append(opRow(QStringLiteral("数量"), QString::number(old.qty), QString::number(qty)));
+        rows.append(opRow(QStringLiteral("最小数量"), QString::number(old.minQty), QString::number(minQty)));
+        rows.append(opRow(QStringLiteral("最大数量"), QString::number(old.maxQty), QString::number(maxQty)));
+        addOpLog(QStringLiteral("修改库存数量"), old.model, old.name, opRowsJson(rows));
+    }
     return true;
 }
 
@@ -1720,6 +1726,35 @@ Drawing DatabaseManager::drawingById(int id) const
         d.createdAt = QDateTime::fromString(q.value(6).toString(), Qt::ISODate);
     }
     return d;
+}
+
+// 手机端离线同步：每日结存数量日志。按记录日期升序，手机端可直接按相邻日期算用量。
+QList<QtyLog> DatabaseManager::qtyLogsChangedSince(const QDateTime &since) const
+{
+    QList<QtyLog> list;
+    QSqlQuery q(m_db);
+    QString sql = QStringLiteral(
+        "SELECT id,product_id,qty,record_date,created_at FROM product_qty_log");
+    if (since.isValid())
+        sql += QStringLiteral(" WHERE created_at > ?");
+    sql += QStringLiteral(" ORDER BY record_date ASC, id ASC");
+    q.prepare(sql);
+    if (since.isValid())
+        q.addBindValue(since.toString(Qt::ISODate));
+    if (!q.exec()) {
+        qWarning() << "qtyLogsChangedSince failed:" << q.lastError().text();
+        return list;
+    }
+    while (q.next()) {
+        QtyLog l;
+        l.id = q.value(0).toInt();
+        l.productId = q.value(1).toInt();
+        l.qty = q.value(2).toInt();
+        l.recordDate = QDate::fromString(q.value(3).toString(), Qt::ISODate);
+        l.createdAt = QDateTime::fromString(q.value(4).toString(), Qt::ISODate);
+        list << l;
+    }
+    return list;
 }
 
 QList<Product> DatabaseManager::productsChangedSince(const QDateTime &since) const

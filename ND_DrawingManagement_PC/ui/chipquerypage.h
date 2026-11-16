@@ -41,6 +41,7 @@ private slots:
     void onQuickPicked(int index);
     void onBrandPicked(int index);
     void onCellDoubleClicked(int row, int column);
+    void onTableContextMenu(const QPoint &pos); // 右键：复制整行 / 复制当前列
 
 private:
     void buildUi();

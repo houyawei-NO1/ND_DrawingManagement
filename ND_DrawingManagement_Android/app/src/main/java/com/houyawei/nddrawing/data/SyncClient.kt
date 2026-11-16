@@ -37,6 +37,19 @@ class SyncClient(private val baseUrl: String) {
         parseDrawings(arr)
     }
 
+    // 每日结存数量日志：库存页离线算今日/周/月/年用量与趋势图。
+    // 旧版 PC 端没有该接口，失败返回空列表，不影响产品/图纸的主同步流程
+    suspend fun fetchQtyLogs(since: String): List<QtyLog> = withContext(Dispatchers.IO) {
+        try {
+            val path = if (since.isEmpty()) "/api/sync/qty_logs"
+            else "/api/sync/qty_logs?since=${enc(since)}"
+            val arr = JSONObject(get(path)).optJSONArray("items") ?: JSONArray()
+            parseQtyLogs(arr)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     // 下载结果：已存在且大小一致则 Skipped；实际下载为 Downloaded；多次重试仍失败为 Failed
     enum class DownloadResult { Downloaded, Skipped, Failed }
 
@@ -234,7 +247,10 @@ internal fun parseProducts(arr: JSONArray): List<Product> {
                 creator = o.optString("creator"),
                 createdAt = o.optString("created_at"),
                 updatedAt = o.optString("updated_at"),
-                ext = ext
+                ext = ext,
+                qty = o.optInt("qty", 0),
+                minQty = o.optInt("min_qty", 0),
+                maxQty = o.optInt("max_qty", 0)
             )
         )
     }
@@ -256,6 +272,25 @@ internal fun parseDrawings(arr: JSONArray): List<Drawing> {
                 createdAt = o.optString("created_at"),
                 relPath = o.optString("rel_path"),
                 fileName = o.optString("file_name")
+            )
+        )
+    }
+    return out
+}
+
+// 与 PC 端 qtyLogJson() / apiSyncQtyLogs 返回的字段一一对应
+internal fun parseQtyLogs(arr: JSONArray): List<QtyLog> {
+    val out = mutableListOf<QtyLog>()
+    for (i in 0 until arr.length()) {
+        val o = arr.optJSONObject(i) ?: continue
+        val date = o.optString("record_date")
+        if (date.isEmpty()) continue
+        out.add(
+            QtyLog(
+                productId = o.optInt("product_id", 0),
+                qty = o.optInt("qty", 0),
+                recordDate = date,
+                createdAt = o.optString("created_at")
             )
         )
     }

@@ -52,7 +52,9 @@ static constexpr auto qt_meta_stringdata_ZN13ChipQueryPageE = QtMocHelpers::stri
     "onBrandPicked",
     "onCellDoubleClicked",
     "row",
-    "column"
+    "column",
+    "onTableContextMenu",
+    "pos"
 );
 #else  // !QT_MOC_HAS_STRINGDATA
 #error "qtmochelpers.h not found or too old."
@@ -64,7 +66,7 @@ Q_CONSTINIT static const uint qt_meta_data_ZN13ChipQueryPageE[] = {
       12,       // revision
        0,       // classname
        0,    0, // classinfo
-      10,   14, // methods
+      11,   14, // methods
        0,    0, // properties
        0,    0, // enums/sets
        0,    0, // constructors
@@ -72,16 +74,17 @@ Q_CONSTINIT static const uint qt_meta_data_ZN13ChipQueryPageE[] = {
        0,       // signalCount
 
  // slots: name, argc, parameters, tag, flags, initial metatype offsets
-       1,    0,   74,    2, 0x08,    1 /* Private */,
-       3,    1,   75,    2, 0x08,    2 /* Private */,
-       5,    0,   78,    2, 0x08,    4 /* Private */,
-       6,    0,   79,    2, 0x08,    5 /* Private */,
-       7,    0,   80,    2, 0x08,    6 /* Private */,
-       8,    0,   81,    2, 0x08,    7 /* Private */,
-       9,    0,   82,    2, 0x08,    8 /* Private */,
-      10,    1,   83,    2, 0x08,    9 /* Private */,
-      12,    1,   86,    2, 0x08,   11 /* Private */,
-      13,    2,   89,    2, 0x08,   13 /* Private */,
+       1,    0,   80,    2, 0x08,    1 /* Private */,
+       3,    1,   81,    2, 0x08,    2 /* Private */,
+       5,    0,   84,    2, 0x08,    4 /* Private */,
+       6,    0,   85,    2, 0x08,    5 /* Private */,
+       7,    0,   86,    2, 0x08,    6 /* Private */,
+       8,    0,   87,    2, 0x08,    7 /* Private */,
+       9,    0,   88,    2, 0x08,    8 /* Private */,
+      10,    1,   89,    2, 0x08,    9 /* Private */,
+      12,    1,   92,    2, 0x08,   11 /* Private */,
+      13,    2,   95,    2, 0x08,   13 /* Private */,
+      16,    1,  100,    2, 0x08,   16 /* Private */,
 
  // slots: parameters
     QMetaType::Void,
@@ -94,6 +97,7 @@ Q_CONSTINIT static const uint qt_meta_data_ZN13ChipQueryPageE[] = {
     QMetaType::Void, QMetaType::Int,   11,
     QMetaType::Void, QMetaType::Int,   11,
     QMetaType::Void, QMetaType::Int, QMetaType::Int,   14,   15,
+    QMetaType::Void, QMetaType::QPoint,   17,
 
        0        // eod
 };
@@ -131,7 +135,10 @@ Q_CONSTINIT const QMetaObject ChipQueryPage::staticMetaObject = { {
         // method 'onCellDoubleClicked'
         QtPrivate::TypeAndForceComplete<void, std::false_type>,
         QtPrivate::TypeAndForceComplete<int, std::false_type>,
-        QtPrivate::TypeAndForceComplete<int, std::false_type>
+        QtPrivate::TypeAndForceComplete<int, std::false_type>,
+        // method 'onTableContextMenu'
+        QtPrivate::TypeAndForceComplete<void, std::false_type>,
+        QtPrivate::TypeAndForceComplete<const QPoint &, std::false_type>
     >,
     nullptr
 } };
@@ -151,6 +158,7 @@ void ChipQueryPage::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _i
         case 7: _t->onQuickPicked((*reinterpret_cast< std::add_pointer_t<int>>(_a[1]))); break;
         case 8: _t->onBrandPicked((*reinterpret_cast< std::add_pointer_t<int>>(_a[1]))); break;
         case 9: _t->onCellDoubleClicked((*reinterpret_cast< std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast< std::add_pointer_t<int>>(_a[2]))); break;
+        case 10: _t->onTableContextMenu((*reinterpret_cast< std::add_pointer_t<QPoint>>(_a[1]))); break;
         default: ;
         }
     }
@@ -175,14 +183,14 @@ int ChipQueryPage::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 10)
+        if (_id < 11)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 10;
+        _id -= 11;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 10)
+        if (_id < 11)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 10;
+        _id -= 11;
     }
     return _id;
 }

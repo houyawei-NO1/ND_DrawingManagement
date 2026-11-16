@@ -16,7 +16,7 @@ import java.net.URL
 import java.nio.charset.StandardCharsets
 
 /**
- * 手机 APP 检查更新：从「设置 → 数据同步」里配置的电脑端 IP 拉取 PC 服务器上的 APK。
+ * 手机 APP 检查更新：从「设置 → 数据同步」里配置的服务器 IP 拉取 PC 服务器上的 APK。
  * 服务器地址就是局域网地址，因此只有手机与电脑在同一局域网时才可用。
  */
 data class AppUpdateInfo(
@@ -38,8 +38,9 @@ object AppUpdate {
 
     private fun baseUrl(ctx: Context): String? {
         val p = ctx.getSharedPreferences("sync", Context.MODE_PRIVATE)
-        val host = (p.getString("host", "") ?: "").trim()
-        val port = (p.getString("port", "8080") ?: "8080").trim().ifEmpty { "8080" }
+        val host = (p.getString("host", DEFAULT_SERVER_HOST) ?: DEFAULT_SERVER_HOST).trim()
+        val port = (p.getString("port", DEFAULT_SERVER_PORT) ?: DEFAULT_SERVER_PORT)
+            .trim().ifEmpty { DEFAULT_SERVER_PORT }
         return if (host.isEmpty()) null else "http://$host:$port"
     }
 

@@ -27,6 +27,8 @@ import com.houyawei.nddrawing.ui.ProductListScreen
 import com.houyawei.nddrawing.ui.ScanScreen
 import com.houyawei.nddrawing.ui.ScanResultScreen
 import com.houyawei.nddrawing.ui.SettingsScreen
+import com.houyawei.nddrawing.ui.StockScreen
+import com.houyawei.nddrawing.ui.StockDetailScreen
 import com.houyawei.nddrawing.ui.SyncScreen
 import com.houyawei.nddrawing.ui.theme.NDDrawingTheme
 import com.houyawei.nddrawing.util.StoragePermission
@@ -142,6 +144,12 @@ fun AppNav(nav: NavHostController) {
         composable("settings/sync") { SyncScreen(nav) }
         composable("settings/drawings") { DrawingsScreen(nav) }
         composable("list") { ProductListScreen(nav) }
+        // 库存：主界面之后的第二个页面。数据来自本地 SQLite，断网可看；有服务器时同步每日数量
+        composable("stock") { StockScreen(nav) }
+        composable("stockdetail/{id}") { backStack ->
+            val id = backStack.arguments?.getString("id")?.toIntOrNull() ?: 0
+            StockDetailScreen(id = id, nav = nav)
+        }
         composable("detail/{id}") { backStack ->
             val id = backStack.arguments?.getString("id")?.toIntOrNull() ?: 0
             ProductDetailScreen(id = id, nav = nav)

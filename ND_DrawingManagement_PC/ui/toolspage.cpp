@@ -1,9 +1,11 @@
 #include "toolspage.h"
 #include "chipquerypage.h"
+#include "codeconvertpage.h"
 #include "db/databasemanager.h"
 #include "server/remoteapiclient.h"
 #include "server/updatemanager.h"
 #include "util/stocktypes.h"
+#include "util/autostart.h"
 #include "ndmessagebox.h"
 #include "roundedmenu.h"
 #include "updatedialog.h"
@@ -42,6 +44,10 @@
 #include <QFile>
 #include <QTimer>
 #include <QEventLoop>
+#include <QCheckBox>
+#include <QTimeEdit>
+#include <QSettings>
+#include <QTime>
 
 namespace {
 // 服务端返回 13 列：
@@ -120,6 +126,7 @@ ToolsPage::ToolsPage(QWidget *parent) : QWidget(parent)
     m_tabs->addTab(buildStockPage(), QStringLiteral("库存查询"));
     m_chipPage = new ChipQueryPage(this);
     m_tabs->addTab(m_chipPage, QStringLiteral("芯片查询"));
+    m_tabs->addTab(new CodeConvertPage(this), QStringLiteral("编码转换"));
     m_tabs->addTab(buildAboutPage(), QStringLiteral("关于"));
     root->addWidget(m_tabs);
 
@@ -448,15 +455,27 @@ void ToolsPage::onStockContextMenu(const QPoint &pos)
 QWidget *ToolsPage::buildAboutPage()
 {
     QWidget *page = new QWidget(this);
-    QVBoxLayout *lay = new QVBoxLayout(page);
-    lay->setContentsMargins(16, 14, 16, 14);
+    page->setObjectName(QStringLiteral("aboutPage"));
+    QVBoxLayout *pageLay = new QVBoxLayout(page);
+    pageLay->setContentsMargins(0, 0, 0, 0);
 
-    QWidget *card = new QWidget(page);
-    card->setObjectName(QStringLiteral("aboutCard"));
-    card->setFixedSize(720, 680);
+    // 内容较多：整页滚动，去掉原来固定 720×680 的灰色卡片框
+    QScrollArea *scroll = new QScrollArea(page);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    // 注意：不要给 viewport 设置「无选择器」的 background:transparent，
+    // 它会传播到所有子控件，把 QPushButton 的绿色背景一起压掉
+    scroll->setStyleSheet(QStringLiteral("QScrollArea{background:transparent;border:none;}"));
+
+    QWidget *card = new QWidget(scroll);
+    card->setObjectName(QStringLiteral("aboutContent"));
+    card->setStyleSheet(QStringLiteral("QWidget#aboutContent{background:transparent;}"));
     QVBoxLayout *cl = new QVBoxLayout(card);
-    cl->setContentsMargins(36, 24, 36, 20);
-    cl->setSpacing(6);
+    cl->setContentsMargins(40, 22, 40, 28);
+    cl->setSpacing(0);
+
+    // 版本号即构建日期：安装包内 version.txt 优先，保证安装后不会变成安装时间
+    const QString buildDate = UpdateManager::instance().localVersion();
 
     QLabel *logo = new QLabel(card);
     const QPixmap pm(QStringLiteral(":/image/logo.png"));
@@ -468,69 +487,236 @@ QWidget *ToolsPage::buildAboutPage()
     title->setObjectName(QStringLiteral("aboutTitle"));
     title->setAlignment(Qt::AlignCenter);
 
-    // 版本号即构建日期：安装包内 version.txt 优先，保证安装后不会变成安装时间
-    const QString buildDate = UpdateManager::instance().localVersion();
+    QLabel *subTitle = new QLabel(QStringLiteral(
+        "版本号：%1（构建日期）").arg(buildDate), card);
+    subTitle->setObjectName(QStringLiteral("aboutInfo"));
+    subTitle->setAlignment(Qt::AlignCenter);
 
-    QScrollArea *scroll = new QScrollArea(card);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setStyleSheet(QStringLiteral("background:transparent;border:none;"));
-    QWidget *infoWrap = new QWidget(scroll);
-    infoWrap->setStyleSheet(QStringLiteral("background:transparent;"));
-    QVBoxLayout *il = new QVBoxLayout(infoWrap);
-    il->setContentsMargins(4, 0, 4, 0);
-    il->setSpacing(0);
-
-    QLabel *info = new QLabel(
-        QStringLiteral("河南南都汽车电子有限公司\n"
-                       "河南省南阳市卧龙区天佑产业园24号楼2楼/3楼/4楼\n"
-                       "开发：侯亚威　18337356560\n"
-                       "版本号：%1（构建日期）").arg(buildDate), infoWrap);
-    info->setObjectName(QStringLiteral("aboutInfo"));
-    info->setAlignment(Qt::AlignCenter);
-    il->addWidget(info);
-    il->addSpacing(14);
-
-    QFrame *line = new QFrame(infoWrap);
-    line->setObjectName(QStringLiteral("aboutLine"));
-    line->setFixedHeight(1);
-    il->addWidget(line);
-    il->addSpacing(14);
-
-    QLabel *techTitle = new QLabel(QStringLiteral("技术"), infoWrap);
-    techTitle->setObjectName(QStringLiteral("aboutTechTitle"));
-    il->addWidget(techTitle);
-    il->addSpacing(8);
-
-    auto addTechGroup = [&](const QString &group, const QString &text) {
-        QLabel *g = new QLabel(group, infoWrap);
-        g->setObjectName(QStringLiteral("aboutGroup"));
-        QLabel *t = new QLabel(text, infoWrap);
-        t->setObjectName(QStringLiteral("aboutTech"));
-        t->setWordWrap(true);
-        il->addWidget(g);
-        il->addWidget(t);
-        il->addSpacing(10);
-    };
-    addTechGroup(QStringLiteral("开发与运行环境"),
-                 QStringLiteral("Qt 6.8.3 / C++17（MSVC 2022 · MinGW-w64 13.1）\n"
-                                "Qt 组件：Core · Gui · Widgets · Sql · Network · HttpServer · Pdf · PdfWidgets · Svg"));
-    addTechGroup(QStringLiteral("功能组件"),
-                 QStringLiteral("数据与服务：SQLite · Qt HttpServer（内嵌网页 + REST API）\n"
-                                "离线 OCR：PaddleOCR-json（PP-OCRv3 中文模型）\n"
-                                "HEIC 解码：libheif 1.23.7 + libde265 1.1.3（QLibrary 动态加载）\n"
-                                "图纸浏览：Qt Pdf / Qt PdfWidgets / Qt Svg\n"
-                                "安装包：Qt Installer Framework 4.11（binarycreator / windeployqt）"));
-    il->addStretch(1);
-    scroll->setWidget(infoWrap);
-    scroll->viewport()->setStyleSheet(QStringLiteral("background:transparent;"));
+    // 联系信息紧随版本号放在页首，页面底部不再重复一份
+    QLabel *contact = new QLabel(QStringLiteral(
+        "河南南都汽车电子有限公司\n"
+        "河南省南阳市卧龙区天佑产业园 24 号楼 2 楼 / 3 楼 / 4 楼\n"
+        "开发：侯亚威　18337356560"), card);
+    contact->setObjectName(QStringLiteral("aboutContact"));
+    contact->setStyleSheet(QStringLiteral(
+        "color:rgba(255,255,255,0.72);font-size:13px;line-height:1.7;"));
+    contact->setAlignment(Qt::AlignCenter);
 
     cl->addWidget(logo);
-    cl->addSpacing(10);
+    cl->addSpacing(8);
     cl->addWidget(title);
-    cl->addSpacing(16);
+    cl->addSpacing(6);
+    cl->addWidget(subTitle);
+    cl->addSpacing(6);
+    cl->addWidget(contact);
+    cl->addSpacing(18);
+    QFrame *headLine = new QFrame(card);
+    headLine->setObjectName(QStringLiteral("aboutLine"));
+    headLine->setFixedHeight(1);
+    cl->addWidget(headLine);
+    cl->addSpacing(14);
 
-    // 关于卡片下方：检查更新（工具页免登录，任何用户都能查服务器上的新版）
+    // 分区标题：细线 + 绿色小标题，顶部与详情区共用
+    auto addHeading = [](QWidget *parent, QVBoxLayout *box, const QString &text) {
+        QFrame *ln = new QFrame(parent);
+        ln->setObjectName(QStringLiteral("aboutLine"));
+        ln->setFixedHeight(1);
+        box->addSpacing(16);
+        box->addWidget(ln);
+        box->addSpacing(14);
+        QLabel *t = new QLabel(text, parent);
+        t->setObjectName(QStringLiteral("aboutTechTitle"));
+        box->addWidget(t);
+        box->addSpacing(10);
+    };
+
+    // 功能介绍 / 技术信息集中放在末尾详情区，整页自上而下滚动阅读
+    QWidget *detail = new QWidget(card);
+    detail->setObjectName(QStringLiteral("aboutDetail"));
+    detail->setStyleSheet(QStringLiteral("QWidget#aboutDetail{background:transparent;}"));
+    QVBoxLayout *dl = new QVBoxLayout(detail);
+    dl->setContentsMargins(0, 0, 0, 0);
+    dl->setSpacing(0);
+
+    auto addBlock = [&](const QString &group, const QString &html) {
+        QLabel *g = new QLabel(group, detail);
+        g->setObjectName(QStringLiteral("aboutGroup"));
+        QLabel *t = new QLabel(html, detail);
+        t->setTextFormat(Qt::RichText);
+        t->setWordWrap(true);
+        t->setMaximumWidth(1080);
+        t->setStyleSheet(QStringLiteral(
+            "color:rgba(255,255,255,0.88);font-size:14px;line-height:1.75;"));
+        dl->addWidget(g);
+        dl->addSpacing(4);
+        dl->addWidget(t);
+        dl->addSpacing(16);
+    };
+
+    addHeading(detail, dl, QStringLiteral("软件功能"));
+
+    addBlock(QStringLiteral("未登录用户 · 免登录即可使用"),
+        QStringLiteral(
+            "<p style='margin:3px 0;'><span style='color:#43CF7C;font-weight:bold;'>01</span>　"
+            "主界面 · 图纸检索：按图号、型号或物料编码快速查找图纸及物料编码。</p>"
+            "<p style='margin:3px 0;'><span style='color:#43CF7C;font-weight:bold;'>02</span>　"
+            "主界面 · 右键复制：右击任意单元格可复制该列数据或整行信息；型号列支持一键复制按中小拖规则转换后的编码型号。</p>"
+            "<p style='margin:3px 0;'><span style='color:#43CF7C;font-weight:bold;'>03</span>　"
+            "主界面 · 订单识别：拖入或粘贴线束订单图片，离线 OCR 识别多个型号并批量查询。</p>"
+            "<p style='margin:3px 0;'><span style='color:#43CF7C;font-weight:bold;'>04</span>　"
+            "工具 · 库存查询：管理员导入最新管家婆存货档案后，可快速检索物料名称、规格及存货编号。</p>"
+            "<p style='margin:3px 0;'><span style='color:#43CF7C;font-weight:bold;'>05</span>　"
+            "工具 · 芯片查询：管理员维护重点芯片资料，可随时查询型号参数及相关信息。</p>"
+            "<p style='margin:3px 0;'><span style='color:#43CF7C;font-weight:bold;'>06</span>　"
+            "工具 · 编码转换：按中小拖编码规则转换型号，页面内附规则说明与转换示例。</p>"
+            "<p style='margin:3px 0;'><span style='color:#43CF7C;font-weight:bold;'>07</span>　"
+            "标题栏 · 快捷入口：点击服务器 IP 打开局域网网页端，点击版本号检查程序更新。</p>"));
+
+    addBlock(QStringLiteral("已登录用户 · 客户端 / 服务器"),
+        QStringLiteral(
+            "<p style='margin:3px 0;'><span style='color:#43CF7C;font-weight:bold;'>客户端</span>　"
+            "可进行产品录入、数量录入及数据库相关操作。</p>"
+            "<p style='margin:3px 0;'><span style='color:#43CF7C;font-weight:bold;'>服务器</span>　"
+            "除客户端功能外，还可进行账号管理、Excel 批量导入、手机同步、工作路径设置、备份还原等系统配置。</p>"));
+
+    addBlock(QStringLiteral("手机端"),
+        QStringLiteral(
+            "<p style='margin:3px 0;'>离线同步数据库，随时在手机上查看产品信息；扫码识别物料号后，直接展示对应产品详情。</p>"));
+
+    addBlock(QStringLiteral("网页端"),
+        QStringLiteral(
+            "<p style='margin:3px 0;'>局域网内在线查看产品详情与图纸，并统计产品库存。</p>"));
+
+    addHeading(detail, dl, QStringLiteral("技术信息"));
+
+    addBlock(QStringLiteral("开发与运行环境"),
+        QStringLiteral("Qt 6.8.3 / C++17（MSVC 2022 · MinGW-w64 13.1）<br>"
+                       "Qt 组件：Core · Gui · Widgets · Sql · Network · HttpServer · Pdf · PdfWidgets · Svg"));
+    addBlock(QStringLiteral("功能组件"),
+        QStringLiteral("数据与服务：SQLite · Qt HttpServer（内嵌网页 + REST API）<br>"
+                       "离线 OCR：PaddleOCR-json（PP-OCRv3 中文模型）<br>"
+                       "HEIC 解码：libheif 1.23.7 + libde265 1.1.3（QLibrary 动态加载）<br>"
+                       "图纸浏览：Qt Pdf / Qt PdfWidgets / Qt Svg<br>"
+                       "安装包：Qt Installer Framework 4.11（binarycreator / windeployqt）"));
+    dl->addStretch(1);
+
+    // 运行设置：开机启动（服务器强制）+ 每日数据录入通知（时间可调）
+    const bool isServer = DatabaseManager::isServer();
+    AutoStart::enforceServerIfNeeded(isServer); // 保证注册表项、配置、勾选框三者一致
+    QSettings cfg;
+
+    const QString ctrlQss = QStringLiteral(
+        "QCheckBox{color:rgba(255,255,255,0.9);font-size:14px;spacing:7px;"
+        "background:transparent;}"
+        "QCheckBox::indicator{width:16px;height:16px;border:1px solid #4A5468;"
+        "border-radius:3px;background:#22293C;}"
+        "QCheckBox::indicator:hover{border-color:#43CF7C;}"
+        "QCheckBox::indicator:checked{background:#43CF7C;border-color:#43CF7C;}"
+        "QCheckBox:disabled{color:rgba(255,255,255,0.55);}");
+
+    QLabel *runTitle = new QLabel(QStringLiteral("运行设置"), card);
+    runTitle->setObjectName(QStringLiteral("aboutTechTitle"));
+
+    m_chkAutoRun = new QCheckBox(QStringLiteral("开机自动启动"), card);
+    m_chkAutoRun->setStyleSheet(ctrlQss);
+    m_chkAutoRun->setCursor(Qt::PointingHandCursor);
+    m_chkAutoRun->setChecked(cfg.value(AutoStart::autoRunKey(), false).toBool());
+    m_chkAutoRun->setToolTip(isServer
+        ? QStringLiteral("服务器主机必须开机自启，否则其他客户端无法获取正常数据")
+        : QStringLiteral("勾选后，登录 Windows 时自动运行本程序"));
+    if (isServer) {
+        m_chkAutoRun->setChecked(true);
+        m_chkAutoRun->setEnabled(false); // 服务器不允许关闭开机启动
+    }
+    QLabel *autoRunTip = new QLabel(isServer
+        ? QStringLiteral("本机为服务器，已强制开启；否则其他客户端无正常数据")
+        : QStringLiteral("登录 Windows 后自动运行本程序"), card);
+    autoRunTip->setObjectName(QStringLiteral("previewInfo"));
+    autoRunTip->setWordWrap(true);
+
+    m_chkDailyNotify = new QCheckBox(QStringLiteral("数据录入通知"), card);
+    m_chkDailyNotify->setStyleSheet(ctrlQss);
+    m_chkDailyNotify->setCursor(Qt::PointingHandCursor);
+    m_chkDailyNotify->setChecked(cfg.value(AutoStart::notifyEnabledKey(), true).toBool());
+
+    m_edtNotifyTime = new QTimeEdit(card);
+    m_edtNotifyTime->setDisplayFormat(QStringLiteral("HH:mm"));
+    m_edtNotifyTime->setTime(AutoStart::configuredNotifyTime());
+    m_edtNotifyTime->setFixedWidth(86);
+    m_edtNotifyTime->setEnabled(m_chkDailyNotify->isChecked());
+    m_edtNotifyTime->setStyleSheet(QStringLiteral(
+        "QTimeEdit{background:#22293C;color:#fff;border:1px solid #4A5468;"
+        "border-radius:5px;padding:3px 6px;font-size:14px;}"
+        "QTimeEdit:disabled{color:rgba(255,255,255,0.45);}"));
+    m_edtNotifyTime->setToolTip(QStringLiteral(
+        "每天到该时刻在屏幕右下角提醒录入微信群内最新每日数量；"
+        "修改后按新时刻生效，当天已经过去的时刻不再补提醒"));
+
+    QLabel *notifyTip = new QLabel(QStringLiteral("提醒录入微信群内最新每日数量"), card);
+    notifyTip->setObjectName(QStringLiteral("previewInfo"));
+    notifyTip->setWordWrap(true);
+
+    QHBoxLayout *autoRunRow = new QHBoxLayout();
+    autoRunRow->addWidget(m_chkAutoRun);
+    autoRunRow->addWidget(autoRunTip, 1);
+    QHBoxLayout *notifyRow = new QHBoxLayout();
+    notifyRow->addWidget(m_chkDailyNotify);
+    notifyRow->addWidget(m_edtNotifyTime);
+    notifyRow->addWidget(notifyTip, 1);
+
+    QVBoxLayout *runLay = new QVBoxLayout();
+    runLay->setContentsMargins(0, 0, 0, 0);
+    runLay->setSpacing(6);
+    QLabel *trayTip = new QLabel(QStringLiteral(
+        "点击右上角关闭键仅隐藏界面，网页端、自动备份、数据录入提醒等仍在后台运行；"
+        "再次点击桌面快捷方式会直接恢复已有界面，不会打开第二个程序。"
+        "也可从系统托盘图标恢复界面，或右键退出程序。"), card);
+    trayTip->setObjectName(QStringLiteral("previewInfo"));
+    trayTip->setWordWrap(true);
+
+    runLay->addWidget(runTitle);
+    runLay->addLayout(autoRunRow);
+    runLay->addLayout(notifyRow);
+    runLay->addWidget(trayTip);
+    cl->addLayout(runLay);
+    cl->addSpacing(10);
+
+    connect(m_chkAutoRun, &QCheckBox::toggled, this, [this](bool on) {
+        if (!AutoStart::setEnabled(on)) {
+            NdMessageBox::warning(this, QStringLiteral("开机启动"),
+                QStringLiteral("写入开机启动项失败，请检查系统权限。"));
+            QSignalBlocker blocker(m_chkAutoRun);
+            m_chkAutoRun->setChecked(!on);
+            return;
+        }
+        QSettings s;
+        s.setValue(AutoStart::autoRunKey(), on);
+        s.sync();
+    });
+    connect(m_chkDailyNotify, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_edtNotifyTime)
+            m_edtNotifyTime->setEnabled(on);
+        QSettings s;
+        s.setValue(AutoStart::notifyEnabledKey(), on);
+        s.sync();
+    });
+    connect(m_edtNotifyTime, &QTimeEdit::timeChanged, this, [this](const QTime &t) {
+        QSettings s;
+        s.setValue(AutoStart::notifyTimeKey(), t.toString(QStringLiteral("HH:mm")));
+        s.sync();
+    });
+
+    addHeading(card, cl, QStringLiteral("版本与下载"));
+
+    // 与库存查询页「导入 / 搜索」一致的绿色主按钮；
+    // 写在按钮自身，优先级高于任何父级样式表，不会被页面透明背景覆盖
+    const QString greenBtnQss = QStringLiteral(
+        "QPushButton#btnEntry{background:#43CF7C;color:#0B1F14;border:none;"
+        "border-radius:8px;padding:7px 18px;font-weight:bold;}"
+        "QPushButton#btnEntry:hover{background:#5CE0A0;}"
+        "QPushButton#btnEntry:pressed{background:#3BB56D;}");
+
+    // 检查更新（工具页免登录，任何用户都能查服务器上的新版）
     QHBoxLayout *checkRow = new QHBoxLayout();
     QLabel *checkTip = new QLabel(QStringLiteral(
         "版本号即程序构建日期，点击右侧按钮检查服务器上的新版本"), card);
@@ -538,6 +724,7 @@ QWidget *ToolsPage::buildAboutPage()
     checkRow->addWidget(checkTip, 1);
     QPushButton *btnCheck = new QPushButton(QStringLiteral("检查更新"), card);
     btnCheck->setObjectName(QStringLiteral("btnEntry"));
+    btnCheck->setStyleSheet(greenBtnQss);
     btnCheck->setCursor(Qt::PointingHandCursor);
     connect(btnCheck, &QPushButton::clicked, this, [this] {
         UpdateDialog::checkForUpdate(this);
@@ -553,6 +740,7 @@ QWidget *ToolsPage::buildAboutPage()
     apkRow->addWidget(m_lblMobileVersion, 1);
     QPushButton *btnApk = new QPushButton(QStringLiteral("下载 APK 文件"), card);
     btnApk->setObjectName(QStringLiteral("btnEntry"));
+    btnApk->setStyleSheet(greenBtnQss);
     btnApk->setCursor(Qt::PointingHandCursor);
     connect(btnApk, &QPushButton::clicked, this, &ToolsPage::onDownloadApk);
     apkRow->addWidget(btnApk);
@@ -564,10 +752,12 @@ QWidget *ToolsPage::buildAboutPage()
     mobileTip->setObjectName(QStringLiteral("previewInfo"));
     mobileTip->setWordWrap(true);
     cl->addWidget(mobileTip);
-    cl->addSpacing(6);
-    cl->addWidget(scroll, 1);
-    lay->addWidget(card, 0, Qt::AlignHCenter);
-    lay->addStretch(1);
+    cl->addSpacing(4);
+    cl->addWidget(detail);
+    cl->addStretch(1);
+
+    scroll->setWidget(card);
+    pageLay->addWidget(scroll);
     return page;
 }
 

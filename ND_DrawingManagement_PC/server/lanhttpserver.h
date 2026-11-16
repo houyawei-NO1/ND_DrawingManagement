@@ -16,6 +16,7 @@ class QHttpServerRequest;
 // 局域网只读网页服务：基于官方 Qt HTTP Server
 // 路由：
 //   GET /                      → 内嵌查询网页（HTML）
+//   GET /apkqr.png             → 关于页手机端下载二维码（静态图片，Qt 资源）
 //   GET /api/products?category=&kw=&dtype=  → JSON 产品列表
 //   GET /api/product?id=       → JSON 产品详情（含更改记录/图纸列表）
 //   GET /drawing?id=           → 图纸文件（图片/PDF 原样输出，浏览器直接预览）
@@ -24,6 +25,7 @@ class QHttpServerRequest;
 //   GET /api/sync/meta                         → 服务器时间/存储根（用于校验）
 //   GET /api/sync/products?since=ISO时间      → 增量产品（含 ext 字段），since 空=全量
 //   GET /api/sync/drawings?since=ISO时间      → 增量图纸记录（含相对存储根的路径）
+//   GET /api/sync/qty_logs?since=ISO时间      → 每日结存数量日志（手机端库存页算用量/趋势图）
 //   GET /api/sync/categories                  → 产品分类
 //   GET /api/sync/fields                      → 各分类特有字段定义（field_key → 中文标签、显示顺序）
 //   GET|HEAD /api/sync/file?path=相对路径[&i=N&total=M] → 二进制图纸 / HEAD 仅返回大小
@@ -64,6 +66,10 @@ public:
     // 返回近 2 分钟内联系过服务器的 PC 客户端（视为在线）
     QList<ClientConn> clients() const;
 
+    // 局域网网页端（浏览器）来访 IP，近 2 分钟内有请求即视为在线。
+    // 与上面的手机同步 / PC 客户端两套记录互相隔离，避免浏览器 IP 混进「已连接客户端」。
+    QStringList webClients() const;
+
     // 手机端在同步握手时上报设备名
     void recordDevice(const QString &device) const;
     // 本机侧同步传输日志（记录手机连接、IP、正在传输的文件等），供设置页「离线同步」展示
@@ -78,6 +84,7 @@ private:
     QByteArray apiSyncSchema() const;
     QByteArray apiSyncMeta() const;
     QByteArray apiSyncProducts(const QDateTime &since) const;
+    QByteArray apiSyncQtyLogs(const QDateTime &since) const; // 每日结存数量日志
     QByteArray apiSyncDrawings(const QDateTime &since) const;
     QByteArray apiSyncCategories() const;   // 下发产品分类（与 PC DatabaseManager::categories 一致）
     QByteArray apiSyncFields() const;       // 下发各分类特有字段配置（field_key/label/sort）
@@ -86,6 +93,8 @@ private:
     void appendLog(const QString &line) const;   // 追加一行本机侧传输日志（带时间戳，限长）
     // 记录 PC 客户端连接（按 IP 去重，更新最近活动与账号）
     void recordClient(const QString &ip, const QString &account, const QString &action) const;
+    // 记录网页端（浏览器）来访 IP，只在明确的网页 GET 路由里调用
+    void recordWebClient(const QString &ip) const;
     QString accountFromToken(const QString &token) const;  // token → 账号（无效返回空）
 
     // 客户端接口：登录 token / 只读查询 / 带鉴权的写操作
@@ -127,6 +136,10 @@ private:
     // PC 客户端连接记录：IP → 最近活动信息（仅内存）
     mutable QMutex m_clientMutex;
     mutable QHash<QString, ClientConn> m_clients;
+
+    // 网页端来访记录：IP → 最近一次请求时间（仅内存，超时记录读取时清理）
+    mutable QMutex m_webMutex;
+    mutable QHash<QString, QDateTime> m_webClients;
 };
 
 #endif // LANHTTPSERVER_H

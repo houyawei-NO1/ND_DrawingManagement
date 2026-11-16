@@ -6,7 +6,10 @@
 #include <QList>
 #include <QStringList>
 #include <QTimer>
+#include <QPointer>
+#include <QDateTime>
 #include "model/product.h"
+#include "dataentrynotify.h"
 
 class QLineEdit;
 class QPushButton;
@@ -22,6 +25,7 @@ class QMouseEvent;
 class QEvent;
 class QStackedWidget;
 class QProcess;
+class QSystemTrayIcon;
 class OcrImageDrop;
 class OcrResultPopup;
 class QPdfDocument;
@@ -39,6 +43,11 @@ class MainWindow : public QWidget
 public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
+
+    // 每日通知点「确 定」：唤起主窗口并进入「录入 → 数量录入」
+    void openQuantityEntry();
+    // 从托盘 / 单实例唤醒请求恢复主窗口
+    void showMainWindow();
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
@@ -58,9 +67,11 @@ private slots:
     void onPreviewContextMenu(const QPoint &globalPos); // 右键图纸框：资源管理器打开路径
     void onSupplementClicked(); // 选中的记录带入录入页补充信息
     void refreshSyncStatus();   // 定时刷新局域网同步状态栏
+    void checkDailyQtyNotify(); // 每分钟检查是否到每日数量录入提醒时间
 
 private:
     void buildTitleBar();
+    void buildSystemTray();     // 关闭后隐藏到后台：托盘图标用于恢复界面 / 真正退出
     void buildCategoryTabs();
     void buildToolBar();
     void buildBody();
@@ -76,6 +87,7 @@ private:
     void applySplitRatio();               // 左右强制比例：普通 3:2，最大化/全屏 1:1
     void clearClientCache();              // 客户端：清理本机图纸预览缓存
     void applyStyle();
+    void showDailyQtyNotify();  // 右下角无遮罩通知（不用 OverlayMask 全屏黑幕）
 
     // 图片拖入 → 异步 OCR → 多型号一次性搜索
     void onImageDropped(const QString &path);
@@ -87,10 +99,11 @@ private:
     // 标题栏
     QPoint m_dragPos;
     bool m_dragging = false;
+    QSystemTrayIcon *m_tray = nullptr;
     bool m_restarting = false; // 切换角色重启中：防止按钮连点启动多个进程
 
     // 分类
-    QButtonGroup *m_menuGroup = nullptr; // 顶部菜单（主界面/录入/管理/设置/工具）
+    QButtonGroup *m_menuGroup = nullptr; // 顶部菜单按钮组：id 与 m_stack 页索引一致（0主界面 1录入 2管理 3设置 4工具）
     QButtonGroup *m_catGroup = nullptr;
     QString m_currentCat;
 
@@ -140,7 +153,8 @@ private:
     QLineEdit *m_userEdit = nullptr;
     QLineEdit *m_pwdEdit = nullptr;
     QLabel *m_pwdError = nullptr;
-    int m_pwdTargetPage = 1; // 验证通过后进入的页面：1录入 2管理 3设置（工具页免验证）
+    // 验证通过后进入的页面：1录入 2管理 3设置 4录入页的「数量录入」（工具页免验证）
+    int m_pwdTargetPage = 1;
 
     // 登录状态
     QLabel *m_loginLabel = nullptr;
@@ -156,8 +170,14 @@ private:
 
     // 局域网同步状态（底部状态栏显示连接设备与进度）
     QLabel *m_syncStatusLabel = nullptr;
+    QLabel *m_webStatusLabel = nullptr;     // 状态栏中间：已连接网页端 IP（仅服务器显示）
     QLabel *m_clientStatusLabel = nullptr;  // 状态栏右侧：已连接客户端 IP（仅服务器显示）
     QTimer *m_syncTimer = nullptr;
+
+    // 每日数量录入提醒：到设定时刻弹一次，启动晚于设定时刻不补弹
+    QTimer *m_notifyTimer = nullptr;
+    QDateTime m_lastNotifyCheck; // 上次检查时刻，用于判断是否刚跨过设定时刻
+    QPointer<DataEntryNotify> m_notify;
 
     // 页面切换：0主界面 1录入 2管理 3设置 4工具
     QStackedWidget *m_stack = nullptr;

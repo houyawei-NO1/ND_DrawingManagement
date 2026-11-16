@@ -12,6 +12,8 @@ import com.houyawei.nddrawing.data.Drawing
 import com.houyawei.nddrawing.data.Repository
 import com.houyawei.nddrawing.data.SyncClient
 import com.houyawei.nddrawing.data.localDrawingFile
+import com.houyawei.nddrawing.util.DEFAULT_SERVER_HOST
+import com.houyawei.nddrawing.util.DEFAULT_SERVER_PORT
 import java.io.File
 
 // 进入产品页时的「按型号补图」：只下载该产品 drawingsOf(id) 里本地缺失的图纸文件。
@@ -21,8 +23,9 @@ import java.io.File
 // 服务器地址与「设置 → 数据同步」共用同一份配置
 internal fun lanBaseUrl(ctx: Context): String? {
     val p = ctx.getSharedPreferences("sync", Context.MODE_PRIVATE)
-    val host = (p.getString("host", "") ?: "").trim()
-    val port = (p.getString("port", "8080") ?: "8080").trim().ifEmpty { "8080" }
+    val host = (p.getString("host", DEFAULT_SERVER_HOST) ?: DEFAULT_SERVER_HOST).trim()
+    val port = (p.getString("port", DEFAULT_SERVER_PORT) ?: DEFAULT_SERVER_PORT)
+        .trim().ifEmpty { DEFAULT_SERVER_PORT }
     return if (host.isEmpty()) null else "http://$host:$port"
 }
 

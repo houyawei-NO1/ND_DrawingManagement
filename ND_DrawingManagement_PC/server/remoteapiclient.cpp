@@ -537,13 +537,15 @@ bool RemoteApiClient::updateMaterialCode(int productId, const QString &code, QSt
     return !writeAction(QStringLiteral("update_material_code"), args, err).isEmpty();
 }
 
-bool RemoteApiClient::updateQuantities(int productId, int qty, int minQty, int maxQty, QString *err)
+bool RemoteApiClient::updateQuantities(int productId, int qty, int minQty, int maxQty,
+                                       QString *err, bool logOp)
 {
     QJsonObject args;
     args[QStringLiteral("id")] = productId;
     args[QStringLiteral("qty")] = qty;
     args[QStringLiteral("min_qty")] = minQty;
     args[QStringLiteral("max_qty")] = maxQty;
+    args[QStringLiteral("log_op")] = logOp;
     return !writeAction(QStringLiteral("update_quantities"), args, err).isEmpty();
 }
 

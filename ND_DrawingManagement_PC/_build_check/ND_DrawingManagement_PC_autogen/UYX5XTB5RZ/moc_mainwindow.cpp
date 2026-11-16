@@ -52,7 +52,8 @@ static constexpr auto qt_meta_stringdata_ZN10MainWindowE = QtMocHelpers::stringD
     "onPreviewContextMenu",
     "globalPos",
     "onSupplementClicked",
-    "refreshSyncStatus"
+    "refreshSyncStatus",
+    "checkDailyQtyNotify"
 );
 #else  // !QT_MOC_HAS_STRINGDATA
 #error "qtmochelpers.h not found or too old."
@@ -64,7 +65,7 @@ Q_CONSTINIT static const uint qt_meta_data_ZN10MainWindowE[] = {
       12,       // revision
        0,       // classname
        0,    0, // classinfo
-       9,   14, // methods
+      10,   14, // methods
        0,    0, // properties
        0,    0, // enums/sets
        0,    0, // constructors
@@ -72,15 +73,16 @@ Q_CONSTINIT static const uint qt_meta_data_ZN10MainWindowE[] = {
        0,       // signalCount
 
  // slots: name, argc, parameters, tag, flags, initial metatype offsets
-       1,    0,   68,    2, 0x08,    1 /* Private */,
-       3,    1,   69,    2, 0x08,    2 /* Private */,
-       5,    2,   72,    2, 0x08,    4 /* Private */,
-       8,    2,   77,    2, 0x08,    7 /* Private */,
-       9,    1,   82,    2, 0x08,   10 /* Private */,
-      11,    0,   85,    2, 0x08,   12 /* Private */,
-      12,    1,   86,    2, 0x08,   13 /* Private */,
-      14,    0,   89,    2, 0x08,   15 /* Private */,
-      15,    0,   90,    2, 0x08,   16 /* Private */,
+       1,    0,   74,    2, 0x08,    1 /* Private */,
+       3,    1,   75,    2, 0x08,    2 /* Private */,
+       5,    2,   78,    2, 0x08,    4 /* Private */,
+       8,    2,   83,    2, 0x08,    7 /* Private */,
+       9,    1,   88,    2, 0x08,   10 /* Private */,
+      11,    0,   91,    2, 0x08,   12 /* Private */,
+      12,    1,   92,    2, 0x08,   13 /* Private */,
+      14,    0,   95,    2, 0x08,   15 /* Private */,
+      15,    0,   96,    2, 0x08,   16 /* Private */,
+      16,    0,   97,    2, 0x08,   17 /* Private */,
 
  // slots: parameters
     QMetaType::Void,
@@ -90,6 +92,7 @@ Q_CONSTINIT static const uint qt_meta_data_ZN10MainWindowE[] = {
     QMetaType::Void, QMetaType::QPoint,   10,
     QMetaType::Void,
     QMetaType::Void, QMetaType::QPoint,   13,
+    QMetaType::Void,
     QMetaType::Void,
     QMetaType::Void,
 
@@ -129,6 +132,8 @@ Q_CONSTINIT const QMetaObject MainWindow::staticMetaObject = { {
         // method 'onSupplementClicked'
         QtPrivate::TypeAndForceComplete<void, std::false_type>,
         // method 'refreshSyncStatus'
+        QtPrivate::TypeAndForceComplete<void, std::false_type>,
+        // method 'checkDailyQtyNotify'
         QtPrivate::TypeAndForceComplete<void, std::false_type>
     >,
     nullptr
@@ -148,6 +153,7 @@ void MainWindow::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, 
         case 6: _t->onPreviewContextMenu((*reinterpret_cast< std::add_pointer_t<QPoint>>(_a[1]))); break;
         case 7: _t->onSupplementClicked(); break;
         case 8: _t->refreshSyncStatus(); break;
+        case 9: _t->checkDailyQtyNotify(); break;
         default: ;
         }
     }
@@ -172,14 +178,14 @@ int MainWindow::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 9)
+        if (_id < 10)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 9;
+        _id -= 10;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 9)
+        if (_id < 10)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 9;
+        _id -= 10;
     }
     return _id;
 }

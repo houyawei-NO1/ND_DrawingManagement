@@ -7,7 +7,16 @@ import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONObject
 import java.io.File
 
-class LocalDb(context: Context, dbFile: File) : SQLiteOpenHelper(context, dbFile.absolutePath, null, 1) {
+class LocalDb(context: Context, dbFile: File) : SQLiteOpenHelper(context, dbFile.absolutePath, null, 2) {
+
+    companion object {
+        // 库存页数据：手机端按日期升序算今日/周/月/年用量
+        private const val CREATE_QTY_LOG =
+            "CREATE TABLE IF NOT EXISTS product_qty_log(" +
+                "product_id INTEGER NOT NULL, qty INTEGER NOT NULL, " +
+                "record_date TEXT NOT NULL, created_at TEXT, " +
+                "PRIMARY KEY(product_id, record_date))"
+    }
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -15,7 +24,10 @@ class LocalDb(context: Context, dbFile: File) : SQLiteOpenHelper(context, dbFile
                 _id INTEGER PRIMARY KEY,
                 category TEXT, material_code TEXT, name TEXT, model TEXT,
                 hw_version TEXT, sw_version TEXT, remark TEXT, creator TEXT,
-                created_at TEXT, updated_at TEXT, ext_json TEXT)"""
+                created_at TEXT, updated_at TEXT, ext_json TEXT,
+                qty INTEGER NOT NULL DEFAULT 0,
+                min_qty INTEGER NOT NULL DEFAULT 0,
+                max_qty INTEGER NOT NULL DEFAULT 0)"""
         )
         db.execSQL(
             """CREATE TABLE drawing(
@@ -24,12 +36,19 @@ class LocalDb(context: Context, dbFile: File) : SQLiteOpenHelper(context, dbFile
                 drawing_date TEXT, created_at TEXT, rel_path TEXT,
                 file_name TEXT, local_path TEXT)"""
         )
+        db.execSQL(CREATE_QTY_LOG)
     }
 
+    // 增量迁移：保留已同步的产品与已下载图纸的本地路径，不 DROP 重建
     override fun onUpgrade(db: SQLiteDatabase, oldV: Int, newV: Int) {
-        db.execSQL("DROP TABLE IF EXISTS product")
-        db.execSQL("DROP TABLE IF EXISTS drawing")
-        onCreate(db)
+        if (oldV < 2) {
+            listOf(
+                "ALTER TABLE product ADD COLUMN qty INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE product ADD COLUMN min_qty INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE product ADD COLUMN max_qty INTEGER NOT NULL DEFAULT 0"
+            ).forEach { sql -> try { db.execSQL(sql) } catch (_: Exception) {} }
+            db.execSQL(CREATE_QTY_LOG)
+        }
     }
 
     fun upsertProduct(p: Product) {
@@ -48,6 +67,9 @@ class LocalDb(context: Context, dbFile: File) : SQLiteOpenHelper(context, dbFile
             val obj = JSONObject()
             p.ext.forEach { (k, vv) -> obj.put(k, vv) }
             put("ext_json", obj.toString())
+            put("qty", p.qty)
+            put("min_qty", p.minQty)
+            put("max_qty", p.maxQty)
         }
         writableDatabase.insertWithOnConflict("product", null, v, SQLiteDatabase.CONFLICT_REPLACE)
     }
@@ -82,6 +104,67 @@ class LocalDb(context: Context, dbFile: File) : SQLiteOpenHelper(context, dbFile
     fun clearAll() {
         writableDatabase.execSQL("DELETE FROM product")
         writableDatabase.execSQL("DELETE FROM drawing")
+        writableDatabase.execSQL(CREATE_QTY_LOG)
+        writableDatabase.execSQL("DELETE FROM product_qty_log")
+    }
+
+    // 全量替换每日数量日志：手机端只读，服务端每次全量下发，直接覆盖最稳妥
+    fun replaceQtyLogs(logs: List<QtyLog>) {
+        val db = writableDatabase
+        db.execSQL(CREATE_QTY_LOG)
+        db.beginTransaction()
+        try {
+            db.delete("product_qty_log", null, null)
+            val v = ContentValues()
+            for (l in logs) {
+                v.clear()
+                v.put("product_id", l.productId)
+                v.put("qty", l.qty)
+                v.put("record_date", l.recordDate)
+                v.put("created_at", l.createdAt)
+                db.insertWithOnConflict("product_qty_log", null, v, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    // 库存列表一次性取全部日志，按产品在内存里分组算用量，避免逐产品查库
+    fun allQtyLogs(): List<QtyLog> = try {
+        readQtyLogs(null, null)
+    } catch (_: Exception) { emptyList() }
+
+    fun qtyLogsOf(productId: Int): List<QtyLog> = try {
+        readQtyLogs("product_id=?", arrayOf(productId.toString()))
+    } catch (_: Exception) { emptyList() }
+
+    private fun readQtyLogs(where: String?, args: Array<String>?): List<QtyLog> {
+        writableDatabase.execSQL(CREATE_QTY_LOG) // 老库升级后确保表存在
+        val cur = readableDatabase.query(
+            "product_qty_log", null, where, args, null, null,
+            "product_id ASC, record_date ASC"
+        )
+        val out = mutableListOf<QtyLog>()
+        cur.use {
+            while (it.moveToNext()) {
+                out.add(
+                    QtyLog(
+                        productId = it.getInt(0),
+                        qty = it.getInt(1),
+                        recordDate = it.getString(2) ?: "",
+                        createdAt = it.getString(3) ?: ""
+                    )
+                )
+            }
+        }
+        return out
+    }
+
+    // 兼容旧库：列不存在时返回 0，避免 getInt(-1) 抛异常
+    private fun android.database.Cursor.intOrZero(col: String): Int {
+        val i = getColumnIndex(col)
+        return if (i >= 0) getInt(i) else 0
     }
 
     // 全量同步后清理服务端已不存在的图纸记录（如电脑上已删除的孤儿记录），
@@ -219,7 +302,10 @@ class LocalDb(context: Context, dbFile: File) : SQLiteOpenHelper(context, dbFile
                         creator = it.getString(8) ?: "",
                         createdAt = it.getString(9) ?: "",
                         updatedAt = it.getString(10) ?: "",
-                        ext = ext
+                        ext = ext,
+                        qty = it.intOrZero("qty"),
+                        minQty = it.intOrZero("min_qty"),
+                        maxQty = it.intOrZero("max_qty")
                     )
                 )
             }
@@ -309,7 +395,10 @@ class LocalDb(context: Context, dbFile: File) : SQLiteOpenHelper(context, dbFile
                     creator = it.getString(8) ?: "",
                     createdAt = it.getString(9) ?: "",
                     updatedAt = it.getString(10) ?: "",
-                    ext = ext
+                    ext = ext,
+                    qty = it.intOrZero("qty"),
+                    minQty = it.intOrZero("min_qty"),
+                    maxQty = it.intOrZero("max_qty")
                 )
             } else null
         }

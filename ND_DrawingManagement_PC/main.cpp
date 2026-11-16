@@ -1,6 +1,8 @@
 #include "ui/mainwindow.h"
 #include "ui/roledialog.h"
 #include "db/databasemanager.h"
+#include "util/autostart.h"
+#include "util/singleinstance.h"
 #include <QApplication>
 #include <QCoreApplication>
 #include <QMessageBox>
@@ -13,6 +15,13 @@ int main(int argc, char *argv[])
     qputenv("QT_SCALE_FACTOR", "1.0");
 
     QApplication a(argc, argv);
+    // 主窗口关闭只是隐藏到后台，网页服务/自动备份/每日提醒仍要运行；退出由托盘菜单显式控制
+    QApplication::setQuitOnLastWindowClosed(false);
+
+    // 已有实例（含隐藏到后台的）：通知它显示窗口后本进程直接退出，
+    // 避免重复启动网页服务、自动备份、每日提醒和第二个托盘图标
+    if (!SingleInstanceGuard::instance().acquire())
+        return 0;
     // 工作路径、本机角色、自动备份开关等配置统一用 QSettings 保存，需在数据库初始化前设置好作用域
     QCoreApplication::setOrganizationName(QStringLiteral("HouYawei"));
     QCoreApplication::setApplicationName(QStringLiteral("ND_DrawingManagement"));
@@ -40,7 +49,13 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    // 服务器主机强制开机自启：否则服务器没启动，其它客户端拿不到正常数据
+    AutoStart::enforceServerIfNeeded(DatabaseManager::isServer());
+
     MainWindow w;
+    // 后续实例发来的唤醒请求：把隐藏/最小化的主窗口恢复到前台
+    QObject::connect(&SingleInstanceGuard::instance(), &SingleInstanceGuard::activated,
+                     &w, &MainWindow::showMainWindow);
     w.show();
     return a.exec();
 }

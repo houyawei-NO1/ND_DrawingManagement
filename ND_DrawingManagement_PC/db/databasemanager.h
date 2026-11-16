@@ -81,7 +81,9 @@ public:
     // 补充/更新物料编码（仅改这一列，刷新 updated_at）
     bool updateMaterialCode(int productId, const QString &code, QString *err = nullptr);
     // 设置产品的数量/最小数量/最大数量（库存），刷新 updated_at
-    bool updateQuantities(int productId, int qty, int minQty, int maxQty, QString *err = nullptr);
+    // logOp=false 用于批量导入：库存同步是附带动作，只由 addQtyLog 记一条每日数量日志
+    bool updateQuantities(int productId, int qty, int minQty, int maxQty,
+                          QString *err = nullptr, bool logOp = true);
     // 追加一条数量录入记录（带日期，供后续日/周/月/年用量统计）
     bool addQtyLog(int productId, int qty, const QDate &date, QString *err = nullptr);
     // 查询某产品的数量日志（按日期倒序）；更新/删除某条数量日志
@@ -97,6 +99,8 @@ public:
     // 同步增量（手机端离线同步）：since 无效时返回全部；drawing.file_path 为绝对路径
     QList<Product> productsChangedSince(const QDateTime &since) const;
     QList<Drawing> drawingsChangedSince(const QDateTime &since) const;
+    // 每日结存数量日志（手机端离线算用量与趋势图）：since 无效时返回全部
+    QList<QtyLog> qtyLogsChangedSince(const QDateTime &since) const;
 
     // 按「分类+型号」查产品 id（与 saveProduct 判重口径一致），-1 表示不存在
     int productIdByCategoryModel(const QString &category, const QString &model) const;

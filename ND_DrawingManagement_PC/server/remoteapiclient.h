@@ -70,7 +70,8 @@ public:
                     bool keepExistingOnEmpty);
     bool deleteProducts(const QList<int> &ids, QString *err);
     bool updateMaterialCode(int productId, const QString &code, QString *err);
-    bool updateQuantities(int productId, int qty, int minQty, int maxQty, QString *err);
+    bool updateQuantities(int productId, int qty, int minQty, int maxQty, QString *err,
+                          bool logOp = true);
     bool addQtyLog(int productId, int qty, const QDate &date, QString *err);
     QList<QtyLog> qtyLogsOf(int productId, QString *err = nullptr) const;
     bool updateQtyLog(int logId, int qty, QString *err);

@@ -5,6 +5,7 @@ E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/_build_che
   D:/Qt/6.8.3/mingw_64/include/QtCore/QList \
   D:/Qt/6.8.3/mingw_64/include/QtCore/QMap \
   D:/Qt/6.8.3/mingw_64/include/QtCore/QObject \
+  D:/Qt/6.8.3/mingw_64/include/QtCore/QPointer \
   D:/Qt/6.8.3/mingw_64/include/QtCore/QRect \
   D:/Qt/6.8.3/mingw_64/include/QtCore/QSize \
   D:/Qt/6.8.3/mingw_64/include/QtCore/QSizeF \
@@ -92,6 +93,7 @@ E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/_build_che
   D:/Qt/6.8.3/mingw_64/include/QtCore/qoverload.h \
   D:/Qt/6.8.3/mingw_64/include/QtCore/qpair.h \
   D:/Qt/6.8.3/mingw_64/include/QtCore/qpoint.h \
+  D:/Qt/6.8.3/mingw_64/include/QtCore/qpointer.h \
   D:/Qt/6.8.3/mingw_64/include/QtCore/qprocessordetection.h \
   D:/Qt/6.8.3/mingw_64/include/QtCore/qrect.h \
   D:/Qt/6.8.3/mingw_64/include/QtCore/qrefcount.h \
@@ -405,4 +407,5 @@ E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/_build_che
   D:/Qt/Tools/mingw1310_64/x86_64-w64-mingw32/include/vadefs.h \
   D:/Qt/Tools/mingw1310_64/x86_64-w64-mingw32/include/wchar.h \
   E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/model/product.h \
+  E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/dataentrynotify.h \
   E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/overlaymask.h

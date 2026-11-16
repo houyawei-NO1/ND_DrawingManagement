@@ -183,13 +183,24 @@ LanHttpServer::LanHttpServer(QObject *parent) : QObject(parent)
     m_tcp = new QTcpServer(this);
 
     // 首页：内嵌只读查询网页
-    m_http->route(QStringLiteral("/"), [this] {
+    m_http->route(QStringLiteral("/"), [this](const QHttpServerRequest &req) {
+        recordWebClient(req.remoteAddress().toString());
         return QHttpServerResponse("text/html; charset=utf-8", buildIndexPage());
     });
 
     // 网页端 logo / 浏览器图标：直接输出 Qt 资源里的图片（与 PC 端同一份文件）
     m_http->route(QStringLiteral("/logo.png"), [] {
         QFile f(QStringLiteral(":/image/logo.png"));
+        if (!f.open(QIODevice::ReadOnly))
+            return QHttpServerResponse(QHttpServerResponder::StatusCode::NotFound);
+        return QHttpServerResponse("image/png", f.readAll());
+    });
+
+    // 关于页手机端下载二维码：静态图片，内容固定为
+    // http://192.168.1.16:8080/api/update/android/package
+    // 图片由管理员生成后放入 res.qrc（:/image/apkqr.png）；未放入时前端显示占位提示。
+    m_http->route(QStringLiteral("/apkqr.png"), [] {
+        QFile f(QStringLiteral(":/image/apkqr.png"));
         if (!f.open(QIODevice::ReadOnly))
             return QHttpServerResponse(QHttpServerResponder::StatusCode::NotFound);
         return QHttpServerResponse("image/png", f.readAll());
@@ -209,6 +220,7 @@ LanHttpServer::LanHttpServer(QObject *parent) : QObject(parent)
 
     // 产品列表
     m_http->route(QStringLiteral("/api/products"), [this](const QHttpServerRequest &req) {
+        recordWebClient(req.remoteAddress().toString());
         const auto q = req.query();
         return QHttpServerResponse("application/json; charset=utf-8",
                                    apiProducts(q.queryItemValue(QStringLiteral("category")),
@@ -218,27 +230,32 @@ LanHttpServer::LanHttpServer(QObject *parent) : QObject(parent)
 
     // 分类特有字段列定义（网页端据此动态生成表头；「所有类别」即分类为空时返回空）
     m_http->route(QStringLiteral("/api/fields"), [this](const QHttpServerRequest &req) {
+        recordWebClient(req.remoteAddress().toString());
         return QHttpServerResponse("application/json; charset=utf-8",
                                    apiFields(req.query().queryItemValue(QStringLiteral("category"))));
     });
 
     // 产品详情
     m_http->route(QStringLiteral("/api/product"), [this](const QHttpServerRequest &req) {
+        recordWebClient(req.remoteAddress().toString());
         const int id = req.query().queryItemValue(QStringLiteral("id")).toInt();
         return QHttpServerResponse("application/json; charset=utf-8", apiProductDetail(id));
     });
 
     // 网页端库存页：全部产品的库存与预警阈值、单个产品的每日数量记录
-    m_http->route(QStringLiteral("/api/stock"), [this] {
+    m_http->route(QStringLiteral("/api/stock"), [this](const QHttpServerRequest &req) {
+        recordWebClient(req.remoteAddress().toString());
         return QHttpServerResponse("application/json; charset=utf-8", apiStock());
     });
     m_http->route(QStringLiteral("/api/qty_logs"), [this](const QHttpServerRequest &req) {
+        recordWebClient(req.remoteAddress().toString());
         const int id = req.query().queryItemValue(QStringLiteral("id")).toInt();
         return QHttpServerResponse("application/json; charset=utf-8", apiQtyLogs(id));
     });
 
     // 图纸文件（图片/PDF 原样输出）
-    m_http->route(QStringLiteral("/drawing"), [](const QHttpServerRequest &req) {
+    m_http->route(QStringLiteral("/drawing"), [this](const QHttpServerRequest &req) {
+        recordWebClient(req.remoteAddress().toString());
         const int id = req.query().queryItemValue(QStringLiteral("id")).toInt();
         const Drawing d = DatabaseManager::instance().drawingById(id);
         if (d.id < 0 || !QFileInfo::exists(d.filePath))
@@ -268,6 +285,15 @@ LanHttpServer::LanHttpServer(QObject *parent) : QObject(parent)
                   .arg(req.remoteAddress().toString(),
                        since.isValid() ? since.toString(Qt::ISODate) : QStringLiteral("全量")));
         return QHttpServerResponse("application/json; charset=utf-8", apiSyncDrawings(since));
+    });
+    // 手机端库存页：每日结存数量日志（离线算今日/周/月/年用量与趋势图）
+    m_http->route(QStringLiteral("/api/sync/qty_logs"), [this](const QHttpServerRequest &req) {
+        const QDateTime since = parseSince(req.query().queryItemValue(QStringLiteral("since")));
+        recordActivity(req.remoteAddress().toString(), QStringLiteral("拉取每日数量"));
+        appendLog(QStringLiteral("手机(IP=%1) 拉取每日数量日志（since=%2）")
+                  .arg(req.remoteAddress().toString(),
+                       since.isValid() ? since.toString(Qt::ISODate) : QStringLiteral("全量")));
+        return QHttpServerResponse("application/json; charset=utf-8", apiSyncQtyLogs(since));
     });
     m_http->route(QStringLiteral("/api/sync/categories"), [this] {
         return QHttpServerResponse("application/json; charset=utf-8", apiSyncCategories());
@@ -614,10 +640,12 @@ QHttpServerResponse LanHttpServer::handleWrite(const QHttpServerRequest &req)
         return jsonOk();
     }
     if (action == QLatin1String("update_quantities")) {
+        // 旧客户端不带 log_op，默认仍记日志；批量导入传 false，避免同一型号出现两条日志
+        const bool logOp = b.value(QStringLiteral("log_op")).toBool(true);
         if (!db.updateQuantities(b.value(QStringLiteral("id")).toInt(-1),
                                  b.value(QStringLiteral("qty")).toInt(),
                                  b.value(QStringLiteral("min_qty")).toInt(),
-                                 b.value(QStringLiteral("max_qty")).toInt(), &err))
+                                 b.value(QStringLiteral("max_qty")).toInt(), &err, logOp))
             return jsonErr(err.isEmpty() ? QStringLiteral("数量更新失败") : err);
         return jsonOk();
     }
@@ -802,6 +830,19 @@ QByteArray LanHttpServer::apiSyncMeta() const
     o["server_time"] = QDateTime::currentDateTime().toString(Qt::ISODate);
     o["storage_root"] = DatabaseManager::instance().storageRoot();
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
+}
+
+// 手机端离线库存页：一次性下发每日结存数量日志，手机端本地按日期算
+// 今日/周/月/年用量与趋势图，断网时也能查看；旧版手机不请求该接口，互不影响。
+QByteArray LanHttpServer::apiSyncQtyLogs(const QDateTime &since) const
+{
+    QJsonArray arr;
+    for (const QtyLog &l : DatabaseManager::instance().qtyLogsChangedSince(since))
+        arr.append(qtyLogJson(l));
+    QJsonObject root;
+    root[QStringLiteral("schema")] = kSyncSchemaVersion;
+    root[QStringLiteral("items")] = arr;
+    return QJsonDocument(root).toJson(QJsonDocument::Compact);
 }
 
 QByteArray LanHttpServer::apiSyncProducts(const QDateTime &since) const
@@ -1080,14 +1121,36 @@ QHttpServerResponse LanHttpServer::handleUpdateUpload(const QHttpServerRequest &
     return jsonOk();
 }
 
+// 浏览器直接打开 /api/update/*/package 时，若没有 Content-Disposition 会把文件保存成
+// URL 末段的 "package"（二维码扫码下载就是这种入口）。这里统一声明为附件并带上服务器上的
+// 原文件名（含版本号），网页按钮、二维码、浏览器地址栏下载都能得到正确文件名。
+// 文件名可能含中文：filename 给纯 ASCII 回退，filename* 按 RFC 5987 传 UTF-8。
+static QByteArray attachmentDisposition(const QString &path)
+{
+    QString name = QFileInfo(path).fileName();
+    name.remove(QLatin1Char('\r')).remove(QLatin1Char('\n'));
+    name.replace(QLatin1Char('"'), QLatin1String("'"));
+    name.replace(QLatin1Char('\\'), QLatin1String("_"));
+    QString fallback = name;
+    for (qsizetype i = 0; i < fallback.size(); ++i) {
+        if (fallback.at(i).unicode() > 127)
+            fallback[i] = QLatin1Char('_');
+    }
+    return QStringLiteral("attachment; filename=\"%1\"; filename*=UTF-8''%2")
+        .arg(fallback, QString::fromLatin1(QUrl::toPercentEncoding(name)))
+        .toUtf8();
+}
+
 QHttpServerResponse LanHttpServer::handleUpdatePackage() const
 {
     const QString abs = UpdateManager::localPackagePath();
     if (abs.isEmpty() || !QFileInfo::exists(abs))
         return QHttpServerResponse(QHttpServerResponder::StatusCode::NotFound);
-    // fromFile 已带 Content-Length / Content-Type，这里只补 Connection，与图纸下载一致
+    // fromFile 已带 Content-Length / Content-Type，这里补附件文件名与 Connection
     QHttpServerResponse resp = QHttpServerResponse::fromFile(abs);
     QHttpHeaders hdr = resp.headers();
+    hdr.append(QHttpHeaders::WellKnownHeader::ContentDisposition,
+               attachmentDisposition(abs));
     hdr.append(QHttpHeaders::WellKnownHeader::Connection, QByteArrayLiteral("close"));
     resp.setHeaders(hdr);
     return resp;
@@ -1112,8 +1175,11 @@ QHttpServerResponse LanHttpServer::handleAndroidPackage() const
     const QString abs = UpdateManager::localPackagePath(PackageKind::Android);
     if (abs.isEmpty() || !QFileInfo::exists(abs))
         return QHttpServerResponse(QHttpServerResponder::StatusCode::NotFound);
+    // 二维码扫码 / 直接打开下载地址时同样保留原 APK 文件名（含版本号）
     QHttpServerResponse resp = QHttpServerResponse::fromFile(abs);
     QHttpHeaders hdr = resp.headers();
+    hdr.append(QHttpHeaders::WellKnownHeader::ContentDisposition,
+               attachmentDisposition(abs));
     hdr.append(QHttpHeaders::WellKnownHeader::Connection, QByteArrayLiteral("close"));
     resp.setHeaders(hdr);
     return resp;
@@ -1179,6 +1245,34 @@ QList<LanHttpServer::ClientConn> LanHttpServer::clients() const
         if (it.value().lastSeen.isValid() && it.value().lastSeen.secsTo(now) <= 120)
             out.append(it.value());
     }
+    return out;
+}
+
+// 网页端（浏览器）来访 IP：单独一套记录，不与手机同步 / PC 客户端混用
+void LanHttpServer::recordWebClient(const QString &ip) const
+{
+    // 归一化 IPv4-mapped IPv6 地址（::ffff:192.168.x.x → 192.168.x.x）
+    const QString k = ip.startsWith(QStringLiteral("::ffff:")) ? ip.mid(7) : ip;
+    if (k.isEmpty())
+        return;
+    QMutexLocker lock(&m_webMutex);
+    m_webClients.insert(k, QDateTime::currentDateTime());
+}
+
+QStringList LanHttpServer::webClients() const
+{
+    QMutexLocker lock(&m_webMutex);
+    const QDateTime now = QDateTime::currentDateTime();
+    QStringList out;
+    for (auto it = m_webClients.begin(); it != m_webClients.end(); ) {
+        if (!it.value().isValid() || it.value().secsTo(now) > 120)
+            it = m_webClients.erase(it);   // 顺手清掉过期记录，避免长期运行无限累积
+        else {
+            out.append(it.key());
+            ++it;
+        }
+    }
+    out.sort();
     return out;
 }
 
@@ -1274,19 +1368,47 @@ QByteArray LanHttpServer::apiFields(const QString &category) const
     return QJsonDocument(root).toJson(QJsonDocument::Compact);
 }
 
-// 库存页列表：按分类遍历全部产品，带出库存数量与预警阈值。
+// 库存页列表：按分类遍历全部产品，带出库存数量、预警阈值与今日/周/年用量。
 // 最新数量优先取最近的每日数量记录，没有记录时用产品表里的数量。
 QByteArray LanHttpServer::apiStock() const
 {
     DatabaseManager &db = DatabaseManager::instance();
+    const QDate today = QDate::currentDate();
+    const QString todayStr = today.toString(Qt::ISODate);
+    const QString weekStr = today.addDays(-6).toString(Qt::ISODate); // 近 7 天（含今天）
+    const QString monthStr = today.toString(QStringLiteral("yyyy-MM"));
+    const QString yearStr = today.toString(QStringLiteral("yyyy"));
     QJsonArray arr;
     for (const QString &cat : DatabaseManager::categories()) {
         const QList<Product> ps = db.searchProducts(cat, QString(), -1);
         for (const Product &p : ps) {
-            int latest = p.qty;
             const QList<QtyLog> logs = db.qtyLogsOf(p.id, nullptr);
+            int latest = p.qty;
             if (!logs.isEmpty())
                 latest = logs.first().qty; // qtyLogsOf 按日期倒序，首条即最新
+
+            // 与 apiQtyLogs / 网页端 usageOf 完全一致：同一天多条只取最新一条，
+            // 按日期升序后用「上一条结存 − 当日结存」推用量（数量上升按 0 计），
+            // 差值归属当日，再汇总今日 / 周 / 年用量。
+            QMap<QString, int> byDay;
+            for (const QtyLog &l : logs) {
+                const QString day = l.recordDate.toString(Qt::ISODate);
+                if (!day.isEmpty() && !byDay.contains(day))
+                    byDay.insert(day, l.qty);
+            }
+            int prev = -1, dayUse = 0, weekUse = 0, monthUse = 0, yearUse = 0;
+            for (auto it = byDay.constBegin(); it != byDay.constEnd(); ++it) {
+                if (prev >= 0) {
+                    const int use = qMax(0, prev - it.value());
+                    const QString &day = it.key();
+                    if (day == todayStr) dayUse += use;
+                    if (day >= weekStr) weekUse += use;
+                    if (day.left(7) == monthStr) monthUse += use;
+                    if (day.left(4) == yearStr) yearUse += use;
+                }
+                prev = it.value();
+            }
+
             QJsonObject o;
             o[QStringLiteral("id")] = p.id;
             o[QStringLiteral("material_code")] = p.materialCode;
@@ -1296,6 +1418,10 @@ QByteArray LanHttpServer::apiStock() const
             o[QStringLiteral("qty")] = latest;
             o[QStringLiteral("min_qty")] = p.minQty;
             o[QStringLiteral("max_qty")] = p.maxQty;
+            o[QStringLiteral("day_use")] = dayUse;
+            o[QStringLiteral("week_use")] = weekUse;
+            o[QStringLiteral("month_use")] = monthUse;
+            o[QStringLiteral("year_use")] = yearUse;
             arr.append(o);
         }
     }
@@ -1399,6 +1525,37 @@ section{flex:1;min-height:0;display:flex;flex-direction:column}
 ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.34)}
 .logo{width:46px;height:46px;flex:none;object-fit:contain;background:transparent}
 .brand{font-size:21px;font-weight:bold;white-space:nowrap}
+.hd .logo,.hd .brand{cursor:pointer}
+.hd .logo:hover,.hd .brand:hover{opacity:.82}
+/* 关于页：隐藏入口（点页头 logo / 标题），不出现在导航里 */
+#pageAbout{overflow:auto;padding:26px 30px}
+.about-wrap{max-width:900px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+.about-card{background:#22293C;border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:20px 22px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+.about-card h2{margin:0 0 12px;font-size:16px;color:#43CF7C}
+.about-card h3{margin:0 0 10px;font-size:14px;color:#fff}
+.about-card p,.about-card li{color:rgba(255,255,255,.78);font-size:13px;line-height:1.9;margin:0}
+.about-card ul{margin:0;padding-left:20px}
+.about-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.about-row{display:flex;gap:18px;align-items:flex-start}
+.about-meta{color:rgba(255,255,255,.55);font-size:12px;line-height:1.9;min-height:76px;word-break:break-all}
+.about-btn{display:inline-block;background:#43CF7C;color:#0B1F14;border:none;border-radius:8px;padding:9px 18px;font-weight:bold;font-size:13px;text-decoration:none;text-align:center;cursor:pointer}
+.about-btn:hover{filter:brightness(1.08)}
+.about-btn.ghost{background:rgba(255,255,255,.12);color:#fff;font-weight:normal}
+.about-btn.off{background:rgba(255,255,255,.09);color:rgba(255,255,255,.4);pointer-events:none}
+.about-qr{width:140px;height:140px;flex:none;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:12px;line-height:1.8;text-align:center}
+.about-qr[hidden]{display:none}
+.about-qr.ph{background:rgba(255,255,255,.05);border:1px dashed rgba(255,255,255,.22);color:rgba(255,255,255,.45)}
+.about-qr.img{background:#fff;border:1px solid rgba(255,255,255,.22);object-fit:contain}
+.about-note{color:rgba(255,255,255,.45);font-size:11.5px;line-height:1.7;margin-top:8px;word-break:break-all}
+.about-center{text-align:center}
+.about-center .about-logo{width:60px;height:60px;object-fit:contain;margin-bottom:10px;background:transparent}
+.about-center .about-name{font-size:20px;font-weight:bold;color:#fff}
+.about-center .about-ver{margin-top:6px;font-size:14px;color:rgba(255,255,255,.8)}
+.about-center .about-contact{margin-top:6px;font-size:13px;line-height:1.9;color:rgba(255,255,255,.72)}
+.about-card h3{margin:12px 0 6px}
+.about-fn{margin:0;padding-left:0;list-style:none;color:rgba(255,255,255,.78);font-size:13px;line-height:1.9}
+.about-fn b,.about-card p b{color:#43CF7C}
+@media(max-width:760px){.about-grid{grid-template-columns:1fr}.about-row{flex-direction:column}}
 button.btn-ghost{background:rgba(255,255,255,.12);color:#fff;font-weight:normal}
 button.btn-ghost:hover{background:rgba(255,255,255,.2)}
 #stockKw{min-width:260px}
@@ -1429,7 +1586,7 @@ tbody tr{cursor:pointer}
 .ovl{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center;z-index:99;cursor:zoom-out}
 .ovl img{max-width:96%;max-height:94%;border-radius:4px;background:#fff}
 section[hidden]{display:none}
-.stock-wrap{display:grid;grid-template-columns:minmax(360px,42%) 1fr;gap:12px;padding:12px 16px;align-items:stretch;flex:1;min-height:0}
+.stock-wrap{display:grid;grid-template-columns:minmax(520px,56%) 1fr;gap:12px;padding:12px 16px;align-items:stretch;flex:1;min-height:0}
 .panel{background:#22293C;border:1px solid rgba(255,255,255,.07);border-radius:12px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,.18)}
 .panel-head{padding:12px 14px;font-weight:bold;border-bottom:1px solid rgba(255,255,255,.08);display:flex;justify-content:space-between;align-items:center}
 .stock-left{display:flex;flex-direction:column;min-height:0}
@@ -1446,12 +1603,26 @@ section[hidden]{display:none}
 #stockTbl tr.row-over td:first-child{border-left-color:#E5C07B}
 #stockTbl tr.sel td{outline:1px solid rgba(255,255,255,.3);outline-offset:-1px}
 .qty-num{font-size:16px;font-weight:bold}
+#stockTbl{font-size:12.5px}
+#stockTbl th,#stockTbl td{padding:6px 6px}
+/* 库存清单：数值列右对齐；表头可点击切换从小到大 / 从大到小 */
+#stockTbl th.num,#stockTbl td.num{text-align:right}
+#stockTbl th.sortable{cursor:pointer;user-select:none}
+#stockTbl th.sortable:hover{color:rgba(255,255,255,.9)}
+#stockTbl th.sortable.on{color:#43CF7C}
+#stockTbl th .sarr{font-size:11px;margin-left:5px;color:rgba(255,255,255,.32)}
+#stockTbl th.sortable.on .sarr{color:#43CF7C}
+#stockTbl td.use-day{font-weight:bold}
+.head-tools{display:flex;align-items:center;gap:12px}
+button.sort-reset{background:rgba(255,255,255,.09);color:rgba(255,255,255,.65);padding:4px 11px;font-size:12px;font-weight:normal;border-radius:6px}
+button.sort-reset:hover{background:rgba(255,255,255,.16);color:#fff}
+button.sort-reset.on{background:rgba(67,207,124,.18);color:#8ef0bb}
 .stock-right{padding:14px;min-height:0;overflow:auto}
 .empty{color:rgba(255,255,255,.45);padding:70px 10px;text-align:center;line-height:1.8}
 .stock-title{font-size:18px;font-weight:bold}
 .stock-sub{color:rgba(255,255,255,.5);font-size:12px;margin-top:5px}
 .badge{display:inline-block;padding:3px 11px;border-radius:20px;font-size:12px;margin-left:10px;vertical-align:middle}
-.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:16px 0}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px;margin:16px 0}
 .kpi{background:linear-gradient(160deg,rgba(255,255,255,.075),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:12px 10px}
 .kpi .lab{color:rgba(255,255,255,.55);font-size:12px}
 .kpi .val{font-size:25px;font-weight:bold;margin-top:6px;letter-spacing:.5px}
@@ -1462,13 +1633,26 @@ section[hidden]{display:none}
 .chart svg{width:100%;height:auto;display:block}
 .chart .none{color:rgba(255,255,255,.4);text-align:center;padding:40px 0}
 .legend{display:flex;gap:16px;flex-wrap:wrap;color:rgba(255,255,255,.45);font-size:11px;margin-top:8px}
+/* 图表：整列命中区域 + 自定义数据卡片（替代浏览器原生 title 小黄条） */
+.plot{position:relative}
+.chart .hit{fill:transparent;pointer-events:all;cursor:crosshair}
+.chart .hit:hover{fill:rgba(255,255,255,.045)}
+.ctip{position:absolute;z-index:5;display:none;pointer-events:none;min-width:150px;
+ background:rgba(30,37,56,.97);border:1px solid rgba(255,255,255,.16);border-radius:10px;
+ padding:10px 12px;box-shadow:0 12px 30px rgba(0,0,0,.5)}
+.ctip .d{color:rgba(255,255,255,.55);font-size:11px;letter-spacing:.4px;margin-bottom:6px}
+.ctip .v{font-size:20px;font-weight:bold;line-height:1.15;white-space:nowrap}
+.ctip .v + .v{margin-top:5px}
+.ctip .v small{font-size:11px;font-weight:normal;color:rgba(255,255,255,.55);margin-left:8px}
+.ctip .s{color:rgba(255,255,255,.62);font-size:11px;margin-top:6px;white-space:nowrap}
+.ctip .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:middle}
 @media(max-width:900px){.stock-wrap{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) minmax(0,1fr)}main{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) minmax(0,1fr)}.kpis{grid-template-columns:repeat(2,1fr)}}
 </style></head>
 <body>
 <div class="ovl" id="ovl" onclick="this.style.display='none'"><img src="" alt=""></div>
 <header class="hd">
-  <img class="logo" src="/logo.png" alt="南都">
-  <div class="brand">南都图纸查询</div>
+  <img class="logo" src="/logo.png" alt="南都" onclick="toggleAbout()" title="关于 / 客户端下载">
+  <div class="brand" id="brand" onclick="toggleAbout()" title="关于 / 客户端下载">南都图纸查询</div>
   <nav class="nav">
     <div id="navQuery" class="on" onclick="go('query')">查询</div>
     <div id="navStock" onclick="go('stock')">库存</div>
@@ -1496,7 +1680,10 @@ section[hidden]{display:none}
   </div>
   <div class="stock-wrap">
     <div class="panel stock-left">
-      <div class="panel-head"><span>库存清单</span><span class="muted" id="stockCount"></span></div>
+      <div class="panel-head"><span>库存清单</span>
+        <span class="head-tools"><span class="muted" id="stockCount"></span>
+          <button class="sort-reset on" id="btnSortReset" onclick="resetStockSort()">规则排序</button>
+        </span></div>
       <div class="panel-body"><table id="stockTbl"></table></div>
     </div>
     <div class="panel stock-right" id="stockRight">
@@ -1504,7 +1691,105 @@ section[hidden]{display:none}
     </div>
   </div>
 </section>
+<!-- 隐藏的关于页：只能从页头 logo / 标题进入，导航中不出现 -->
+<section id="pageAbout" hidden>
+ <div class="about-wrap">
+  <!-- ① 公司信息：与 PC 端「关于」页首同款居中排版 -->
+  <div class="about-card about-center">
+   <img class="about-logo" src="/logo.png" alt="南都">
+   <div class="about-name">南都图纸管理</div>
+   <div class="about-ver">版本号：__BUILD_DATE__（构建日期）</div>
+   <div class="about-contact">河南南都汽车电子有限公司<br>
+      河南省南阳市卧龙区天佑产业园 24 号楼 2 楼 / 3 楼 / 4 楼<br>
+      开发：侯亚威　18337356560</div>
+  </div>
+
+  <!-- ② 网页端怎么用 -->
+  <div class="about-card">
+   <h2>网页端怎么用</h2>
+   <ul>
+    <li>「查询」页：按分类浏览，输入型号 / 物料编码 / 名称搜索，可按下发图 / 会签图筛选图纸。</li>
+    <li>点击左侧任意一行，右侧显示产品详情、更改记录与图纸；点击图纸可放大预览。</li>
+    <li>「库存」页：查看最新数量、今日 / 周 / 月 / 年用量与库存预警；点击表头切换升序 / 降序，点产品看趋势图与用量统计。</li>
+    <li>图表把鼠标移到某一列，即可查看该日期的结存、用量与入库数据。</li>
+    <li>本网页为只读查询，数据由服务器主机统一维护；手机端无服务器时也可离线查看，有服务器时同步。</li>
+   </ul>
+  </div>
+
+  <!-- ③ 客户端下载 -->
+  <div class="about-card">
+   <h2>客户端下载（服务器当前版本）</h2>
+   <div class="about-grid">
+    <div>
+     <h3>PC 客户端</h3>
+     <div class="about-meta" id="pcMeta">正在读取版本信息…</div>
+     <a class="about-btn" id="pcDl" href="/api/update/package" download>下载 PC 客户端</a>
+     <div class="about-note">安装包由服务器统一上传，始终指向当前最新 PC 版本。</div>
+    </div>
+    <div>
+     <h3>手机客户端（Android）</h3>
+     <div class="about-row">
+      <div>
+       <div class="about-qr ph" id="apkQr">二维码图片<br>待放置</div>
+       <img class="about-qr img" id="apkQrImg" src="/apkqr.png" alt="手机客户端下载二维码" hidden
+            onload="this.hidden=false;document.getElementById('apkQr').hidden=true"
+            onerror="this.hidden=true;document.getElementById('apkQr').hidden=false">
+      </div>
+      <div>
+       <div class="about-meta" id="apkMeta">正在读取版本信息…</div>
+       <a class="about-btn ghost" id="apkDl" href="/api/update/android/package" download>直接下载 APK</a>
+      </div>
+     </div>
+     <div class="about-note" id="apkUrl">扫码地址：—</div>
+    </div>
+   </div>
+  </div>
+
+  <!-- ④ 客户端软件功能：与 PC 端「关于」一致 -->
+  <div class="about-card">
+   <h2>客户端软件功能</h2>
+   <h3>未登录用户 · 免登录即可使用</h3>
+   <ol class="about-fn">
+    <li><b>01</b>　主界面 · 图纸检索：按图号、型号或物料编码快速查找图纸及物料编码。</li>
+    <li><b>02</b>　主界面 · 右键复制：右击任意单元格可复制该列数据或整行信息；型号列支持一键复制按中小拖规则转换后的编码型号。</li>
+    <li><b>03</b>　主界面 · 订单识别：拖入或粘贴线束订单图片，离线 OCR 识别多个型号并批量查询。</li>
+    <li><b>04</b>　工具 · 库存查询：管理员导入最新管家婆存货档案后，可快速检索物料名称、规格及存货编号。</li>
+    <li><b>05</b>　工具 · 芯片查询：管理员维护重点芯片资料，可随时查询型号参数及相关信息。</li>
+    <li><b>06</b>　工具 · 编码转换：按中小拖编码规则转换型号，页面内附规则说明与转换示例。</li>
+    <li><b>07</b>　标题栏 · 快捷入口：点击服务器 IP 打开局域网网页端，点击版本号检查程序更新。</li>
+   </ol>
+   <h3>已登录用户 · 客户端 / 服务器</h3>
+   <p><b>客户端</b>　可进行产品录入、数量录入及数据库相关操作。</p>
+   <p><b>服务器</b>　除客户端功能外，还可进行账号管理、Excel 批量导入、手机同步、工作路径设置、备份还原等系统配置。</p>
+   <h3>手机端 / 网页端</h3>
+   <p>手机端：离线同步数据库，随时在手机上查看产品信息；扫码识别物料号后，直接展示对应产品详情。</p>
+   <p>网页端：局域网内在线查看产品详情与图纸，并统计产品库存。</p>
+  </div>
+
+  <!-- ⑤ 技术信息：与 PC 端「关于」一致 -->
+  <div class="about-card">
+   <h2>技术信息</h2>
+   <h3>开发与运行环境</h3>
+   <p>Qt 6.8.3 / C++17（MSVC 2022 · MinGW-w64 13.1）<br>
+      Qt 组件：Core · Gui · Widgets · Sql · Network · HttpServer · Pdf · PdfWidgets · Svg</p>
+   <h3>功能组件</h3>
+   <p>数据与服务：SQLite · Qt HttpServer（内嵌网页 + REST API）<br>
+      离线 OCR：PaddleOCR-json（PP-OCRv3 中文模型）<br>
+      HEIC 解码：libheif 1.23.7 + libde265 1.1.3（QLibrary 动态加载）<br>
+      图纸浏览：Qt Pdf / Qt PdfWidgets / Qt Svg<br>
+      安装包：Qt Installer Framework 4.11（binarycreator / windeployqt）</p>
+  </div>
+ </div>
+</section>
 <script>
+// 直达库存页 / 关于页时先改标题，避免 init 异步取数期间闪一下图纸标题
+if(location.search.indexOf("stock")>=0){
+ document.getElementById("brand").textContent="南都库存查询";
+ document.title="南都库存查询";
+}else if(location.search.indexOf("about")>=0){
+ document.getElementById("brand").textContent="南都图纸管理";
+ document.title="南都图纸管理";
+}
 // 与 PC / 手机端一致：搜索行在上、分类行在下；分类首位「所有类别」= 不限分类；
 // 搜索范围由当前页签决定，「所有类别」下不显示各分类的特有字段。
 const FALLBACK=["控制器","电器盒","开关","传感器","仪表","线束","方向盘"];
@@ -1564,14 +1849,57 @@ document.getElementById("kw").addEventListener("keydown",e=>{if(e.key==="Enter")
 
 // ==================== 库存页 ====================
 let stockRows=[];
+// key=null 为默认「规则排序」（预警等级优先）；否则按数值列排序，dir 1 小→大、-1 大→小
+let stockSort={key:null,dir:1};
+const SORT_LABEL={qty:"最新数量",day_use:"今日用量",week_use:"周用量",month_use:"月用量",year_use:"年用量"};
+let curPage="query",lastPage="query";
 function go(pg){
- const q=pg==="query";
+ const q=pg==="query",s=pg==="stock",a=pg==="about";
+ if(!a)lastPage=pg;
+ curPage=pg;
  document.getElementById("pageQuery").hidden=!q;
- document.getElementById("pageStock").hidden=q;
+ document.getElementById("pageStock").hidden=!s;
+ document.getElementById("pageAbout").hidden=!a;
  document.getElementById("navQuery").className=q?"on":"";
- document.getElementById("navStock").className=q?"":"on";
- // 每次切到库存页都重新取数：PC 端刚改过安全值时，切一下就能看到最新预警
- if(!q)loadStock();
+ document.getElementById("navStock").className=s?"on":"";
+ const title=a?"南都图纸管理":(q?"南都图纸查询":"南都库存查询");
+ document.getElementById("brand").textContent=title;
+ document.title=title; // 浏览器标签标题同步切换
+ if(s)loadStock(); // 每次切到库存页都重新取数
+ if(a)loadAbout();
+}
+function toggleAbout(){ go(curPage==="about"?lastPage:"about"); }
+
+// ===== 关于页：读取服务器最新版本信息，未上传时禁用下载 =====
+function sizeText(n){n=Number(n)||0;return n>1048576?(n/1048576).toFixed(1)+" MB":(n/1024).toFixed(0)+" KB";}
+function setPkgUi(prefix,o,fallbackName){
+ const ok=!!(o&&o.available);
+ const meta=document.getElementById(prefix+"Meta"),dl=document.getElementById(prefix+"Dl");
+ if(!ok){
+  meta.textContent="尚未上传安装包，请联系管理员在服务器上传后再下载。";
+  dl.classList.add("off");
+  dl.removeAttribute("href");
+  return false;
+ }
+ meta.innerHTML="版本："+esc(o.version||"—")+"<br>文件："+esc(o.file||"—")
+  +"<br>大小："+sizeText(o.size)+(o.uploaded_at?"<br>上传："+esc(o.uploaded_at):"");
+ dl.classList.remove("off");
+ dl.setAttribute("href",prefix==="pc"?"/api/update/package":"/api/update/android/package");
+ dl.setAttribute("download",o.file||fallbackName);
+ return true;
+}
+// 静态二维码：内容固定，不随访问地址变化；二维码图片由管理员生成后作为资源打包
+const APK_QR_URL="http://192.168.1.16:8080/api/update/android/package";
+async function loadAbout(){
+ document.getElementById("apkUrl").innerHTML="扫码地址："+esc(APK_QR_URL)
+  +"<br>手机与电脑需处于同一局域网；服务器 IP 或端口变更时，请重新生成二维码。";
+ try{
+  const r=await fetch("/api/update/info",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+  setPkgUi("pc",await r.json(),"ND_DrawingManagement_PC.exe");
+ }catch(e){document.getElementById("pcMeta").textContent="版本信息读取失败："+e.message;}
+ try{
+  setPkgUi("apk",await(await fetch("/api/update/android/info")).json(),"ND_DrawingManagement.apk");
+ }catch(e){document.getElementById("apkMeta").textContent="版本信息读取失败："+e.message;}
 }
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 function fmt(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");}
@@ -1603,14 +1931,37 @@ function stockFiltered(){
  return stockRows.filter(p=>[p.material_code,p.name,p.model,p.category]
   .some(v=>String(v==null?"":v).toLowerCase().indexOf(kw)>=0));
 }
+function sortHead(key,label){
+ const on=stockSort.key===key;
+ const arrow=on?(stockSort.dir>0?"↑":"↓"):"↕";
+ return `<th class="num sortable${on?" on":""}" onclick="onSort('${key}')" title="点击切换从小到大 / 从大到小">${label}<span class="sarr">${arrow}</span></th>`;
+}
+function onSort(key){
+ if(stockSort.key===key)stockSort.dir=-stockSort.dir;
+ else{stockSort.key=key;stockSort.dir=1;}
+ renderStockTable();
+}
+function resetStockSort(){
+ stockSort={key:null,dir:1};
+ renderStockTable();
+}
 function renderStockTable(){
- const rows=stockFiltered(),kw=getStockKw();
+ const kw=getStockKw(),rows=stockFiltered();
+ if(stockSort.key){
+  const k=stockSort.key,dir=stockSort.dir;
+  rows.sort((a,b)=>((Number(a[k])||0)-(Number(b[k])||0))*dir);
+ }
  const alarm=stockRows.filter(p=>stockRank(p)<=1).length;
- document.getElementById("stockCount").textContent=kw?`匹配 ${rows.length} / 共 ${stockRows.length} 项`:`共 ${stockRows.length} 项 · 报警 ${alarm} 项`;
+ const state=stockSort.key?`按${SORT_LABEL[stockSort.key]}${stockSort.dir>0?"从小到大":"从大到小"}`:"规则排序";
+ document.getElementById("stockCount").textContent=(kw?`匹配 ${rows.length} / 共 ${stockRows.length} 项`:`共 ${stockRows.length} 项 · 报警 ${alarm} 项`)+` · ${state}`;
+ document.getElementById("btnSortReset").className="sort-reset"+(stockSort.key?"":" on");
  document.getElementById("stockHint").textContent=kw?`已筛出 ${rows.length} 项，点击行查看数量统计`:"输入关键词可快速定位产品并查看数量统计";
- let h="<thead><tr><th>物料编码</th><th>名称</th><th>型号</th><th>最新数量</th></tr></thead><tbody>";
+ let h="<thead><tr><th>物料编码</th><th>名称</th><th>型号</th>"
+  +sortHead("qty","最新数量")+sortHead("day_use","今日用量")
+  +sortHead("week_use","周用量")+sortHead("month_use","月用量")
+  +sortHead("year_use","年用量")+"</tr></thead><tbody>";
  if(!rows.length)
-  h+="<tr><td colspan='4' style='text-align:center;padding:36px;color:rgba(255,255,255,.45)'>"+(kw?"没有匹配的产品":"暂无产品数据")+"</td></tr>";
+  h+="<tr><td colspan='8' style='text-align:center;padding:36px;color:rgba(255,255,255,.45)'>"+(kw?"没有匹配的产品":"暂无产品数据")+"</td></tr>";
  rows.forEach(p=>{
   let cls="row-none";
   const mn=Number(p.min_qty)||0,mx=Number(p.max_qty)||0,q=Number(p.qty)||0;
@@ -1619,7 +1970,7 @@ function renderStockTable(){
    else if(q>mx)cls="row-over";
    else cls="row-ok";
   }
-  h+=`<tr data-id="${p.id}" class="${cls}" onclick="loadStockDetail(${p.id},this)"><td>${esc(p.material_code)}</td><td>${esc(p.name)}</td><td>${esc(p.model)}</td><td class="qty-num">${p.qty}</td></tr>`;
+  h+=`<tr data-id="${p.id}" class="${cls}" onclick="loadStockDetail(${p.id},this)"><td>${esc(p.material_code)}</td><td>${esc(p.name)}</td><td>${esc(p.model)}</td><td class="qty-num num">${p.qty}</td><td class="num use-day">${p.day_use||0}</td><td class="num">${p.week_use||0}</td><td class="num">${p.month_use||0}</td><td class="num">${p.year_use||0}</td></tr>`;
  });
  document.getElementById("stockTbl").innerHTML=h+"</tbody>";
 }
@@ -1648,8 +1999,15 @@ async function loadStockDetail(id,tr){
 // 用量 = 上一条数量 − 当日数量（减少算消耗）；若数量上升，说明当日有入库/补货，
 // 记为 inc，用量按 0 计，不产生负用量、也不冲抵其它日期的用量。
 // 差值归属到「当日录入日」，今日/周/月/年用量按该日期汇总。
+// 首条记录口径：按记录日期（不是录入时间）2026-11-01 起，第一次录入的结存视为「从 0 入库」；
+// 此前的第一次录入属于建立库存（期初建账），既不算用量也不算入库，避免历史补录虚增入库。
+const INBOUND_FROM="2026-11-01";
 function usageOf(logs){
  const u=[];
+ if(logs.length){
+  const f=logs[0],q=Number(f.qty)||0;
+  if(q>0 && f.date>=INBOUND_FROM) u.push({date:f.date,val:0,inc:q});
+ }
  for(let i=1;i<logs.length;i++){
   const diff=(Number(logs[i-1].qty)||0)-(Number(logs[i].qty)||0);
   u.push({date:logs[i].date,val:Math.max(0,diff),inc:Math.max(0,-diff)});
@@ -1657,12 +2015,43 @@ function usageOf(logs){
  return u;
 }
 
+// 图表悬停：整列命中 + 自定义数据卡片，鼠标不必精确压在圆点/柱子上
+document.addEventListener("mousemove",e=>{
+ const hit=e.target&&e.target.closest?e.target.closest(".hit"):null;
+ document.querySelectorAll(".ctip").forEach(t=>{if(t.style.display==="block")t.style.display="none";});
+ if(!hit)return;
+ const plot=hit.closest(".plot"),tip=plot?plot.querySelector(".ctip"):null;
+ if(!tip)return;
+ const c=hit.getAttribute("data-color")||"#43CF7C",sub=hit.getAttribute("data-sub")||"";
+ const val=hit.getAttribute("data-val")||"0",unit=hit.getAttribute("data-unit")||"";
+ const date=hit.getAttribute("data-date")||"",inc=hit.getAttribute("data-inc");
+ let html="<div class='d'>"+date+"</div>";
+ if(inc!==null){ // 用量 / 入库柱状图：两项都是主数值，值为 0 的一项自动弱化
+  const ic=hit.getAttribute("data-inc-color")||"#43CF7C";
+  const row=(color,num,label)=>"<div class='v' style='color:"+color+";opacity:"+(Number(num)>0?1:.45)+"'><span class='dot' style='background:"+color+"'></span>"+num+"<small>"+label+"</small></div>";
+  html+=row(c,val,unit)+row(ic,inc,hit.getAttribute("data-inc-unit")||"入库 / 补货");
+ }else{ // 折线图：保持单行主数值 + 副标题
+  html+="<div class='v' style='color:"+c+"'><span class='dot' style='background:"+c+"'></span>"
+   +val+"<small>"+unit+"</small></div>"+(sub?"<div class='s'>"+sub+"</div>":"");
+ }
+ tip.innerHTML=html;
+ tip.style.display="block";
+ const r=plot.getBoundingClientRect();
+ let left=e.clientX-r.left+16,top=e.clientY-r.top-12;
+ const tw=tip.offsetWidth,th=tip.offsetHeight;
+ if(left+tw>r.width-6)left=e.clientX-r.left-tw-16;
+ if(left<6)left=6;
+ if(top+th>r.height-6)top=r.height-th-6;
+ if(top<6)top=6;
+ tip.style.left=left+"px";tip.style.top=top+"px";
+});
+
 // 通用折线图：data=[{date,qty}]，opt 指定颜色/渐变 id/月度标签/取值条数
 function lineChart(logs,opt){
  opt=opt||{};
  const data=logs.slice(-(opt.limit||60));
  if(!data.length)return "<div class='none'>"+(opt.empty||"暂无每日数量记录")+"</div>";
- const color=opt.color||"#43CF7C",gid=opt.gid||"ga";
+ const color=opt.color||"#43CF7C",gid=opt.gid||"ga",unit=opt.unit||"结存数量";
  const lab=x=>opt.monthly?x.date.slice(2):x.date.slice(5);
  const W=640,H=220,L=46,R=14,T=16,B=30;
  const vals=data.map(x=>Number(x.qty)||0);
@@ -1672,7 +2061,7 @@ function lineChart(logs,opt){
  const py=v=>T+(mx-v)*(H-T-B)/(mx-mn);
  const pts=data.map((x,i)=>`${px(i).toFixed(1)},${py(Number(x.qty)||0).toFixed(1)}`).join(" ");
  const area=`${L},${H-B} ${pts} ${px(data.length-1).toFixed(1)},${H-B}`;
- let grid="",xlab="";
+ let grid="",xlab="",hits="";
  for(let k=0;k<=4;k++){
   const gy=T+k*(H-T-B)/4,raw=mx-(mx-mn)*k/4,v=(mx-mn<5)?raw.toFixed(1):Math.round(raw);
   grid+=`<line x1="${L}" y1="${gy}" x2="${W-R}" y2="${gy}" stroke="rgba(255,255,255,.08)"/>`;
@@ -1681,10 +2070,16 @@ function lineChart(logs,opt){
  const step=Math.max(1,Math.ceil(data.length/6));
  data.forEach((x,i)=>{if(i%step===0||i===data.length-1)
   xlab+=`<text x="${px(i).toFixed(1)}" y="${H-8}" fill="rgba(255,255,255,.4)" font-size="10" text-anchor="middle">${lab(x)}</text>`;});
- const dots=data.map((x,i)=>`<circle cx="${px(i).toFixed(1)}" cy="${py(Number(x.qty)||0).toFixed(1)}" r="3" fill="${color}"><title>${x.date}：${x.qty}</title></circle>`).join("");
- return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+ const dots=data.map((x,i)=>`<circle cx="${px(i).toFixed(1)}" cy="${py(Number(x.qty)||0).toFixed(1)}" r="3" fill="${color}"/>`).join("");
+ // 每个点一个透明竖列：左右边界取相邻点中点，覆盖图表全高
+ data.forEach((x,i)=>{
+  const left=i===0?L:(px(i-1)+px(i))/2;
+  const right=i===data.length-1?W-R:(px(i)+px(i+1))/2;
+  hits+=`<rect class="hit" x="${left.toFixed(1)}" y="0" width="${(right-left).toFixed(1)}" height="${H}" data-date="${x.date}" data-val="${x.qty}" data-unit="${unit}" data-color="${color}" data-sub="${opt.monthly?"月度记录":"按日记录"}"/>`;
+ });
+ return `<div class="plot"><svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
  <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${color}" stop-opacity=".4"/><stop offset="100%" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
- ${grid}<polygon points="${area}" fill="url(#${gid})"/><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>${dots}${xlab}</svg>`;
+ ${grid}<polygon points="${area}" fill="url(#${gid})"/><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>${dots}${xlab}${hits}</svg><div class="ctip"></div></div>`;
 }
 
 // 每月数量趋势：每月取最后一次录入的结存数量（月末库存）
@@ -1707,7 +2102,7 @@ function barChart(usage){
  const mx=Math.max(1,...data.map(x=>Math.max(x.val||0,x.inc||0)));
  const slot=(W-L-R)/data.length,bw=Math.max(2,slot*.34);
  const bx=i=>L+i*slot+(slot-bw*2-2)/2;
- let grid="",bars="",xlab="";
+ let grid="",bars="",xlab="",hits="";
  for(let k=0;k<=3;k++){
   const gy=T+k*(H-T-B)/3,raw=mx*(1-k/3),v=(mx<5)?raw.toFixed(1):Math.round(raw);
   grid+=`<line x1="${L}" y1="${gy}" x2="${W-R}" y2="${gy}" stroke="rgba(255,255,255,.08)"/>`;
@@ -1717,15 +2112,17 @@ function barChart(usage){
  data.forEach((u,i)=>{
   const h1=(u.val||0)/mx*(H-T-B),h2=(u.inc||0)/mx*(H-T-B);
   if(h1>0)
-   bars+=`<rect x="${bx(i).toFixed(1)}" y="${(H-B-h1).toFixed(1)}" width="${bw.toFixed(1)}" height="${h1.toFixed(1)}" rx="2" fill="url(#gb)"><title>${u.date} 用量 ${u.val}</title></rect>`;
+   bars+=`<rect x="${bx(i).toFixed(1)}" y="${(H-B-h1).toFixed(1)}" width="${bw.toFixed(1)}" height="${h1.toFixed(1)}" rx="2" fill="url(#gb)"/>`;
   if(h2>0)
-   bars+=`<rect x="${(bx(i)+bw+2).toFixed(1)}" y="${(H-B-h2).toFixed(1)}" width="${bw.toFixed(1)}" height="${h2.toFixed(1)}" rx="2" fill="#43CF7C"><title>${u.date} 入库/补货 +${u.inc}</title></rect>`;
+   bars+=`<rect x="${(bx(i)+bw+2).toFixed(1)}" y="${(H-B-h2).toFixed(1)}" width="${bw.toFixed(1)}" height="${h2.toFixed(1)}" rx="2" fill="#43CF7C"/>`;
   if(i%step===0||i===data.length-1)
    xlab+=`<text x="${(L+i*slot+slot/2).toFixed(1)}" y="${H-8}" fill="rgba(255,255,255,.4)" font-size="10" text-anchor="middle">${u.date.slice(5)}</text>`;
+  // 整列命中：用量与入库都作为主数值写进浮窗，不再把入库塞进小字副标题
+  hits+=`<rect class="hit" x="${(L+i*slot).toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${H}" data-date="${u.date}" data-val="${u.val||0}" data-unit="用量" data-color="#5aa9ff" data-inc="${u.inc||0}" data-inc-unit="入库 / 补货" data-inc-color="#43CF7C"/>`;
  });
- return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+ return `<div class="plot"><svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
  <defs><linearGradient id="gb" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#5aa9ff"/><stop offset="100%" stop-color="#1673db" stop-opacity=".55"/></linearGradient></defs>
- ${grid}${bars}${xlab}</svg>`;
+ ${grid}${bars}${xlab}${hits}</svg><div class="ctip"></div></div>`;
 }
 
 function renderStock(p,d){
@@ -1762,14 +2159,14 @@ function renderStock(p,d){
    <span class="badge" style="background:${color}26;color:${color}">${state}${rangeText}</span></div>
   <div class="stock-sub">物料编码：${esc(p.material_code)}　分类：${esc(p.category||"-")}　数量记录：${logs.length} 天</div>
   ${kpis}
-  <div class="chart"><h3>每日数量趋势</h3>${lineChart(logs)}
-   <div class="legend"><span>数据库每天只存实际结存数量</span><span>最近 60 条记录</span><span>鼠标悬停可看当天数值</span></div></div>
-  <div class="chart"><h3>每月数量趋势</h3>${lineChart(monthlyQty(logs),{color:"#5aa9ff",gid:"gmq",monthly:true,limit:120,empty:"暂无每月数量记录"})}
-   <div class="legend"><span>每月最后一次录入的结存数量（月末库存）</span><span>最多展示 120 个月</span><span>鼠标悬停可看当月数值</span></div></div>
+  <div class="chart"><h3>每日数量趋势</h3>${lineChart(logs,{unit:"结存数量"})}
+   <div class="legend"><span>数据库每天只存实际结存数量</span><span>最近 60 条记录</span><span>鼠标移到图上任意位置即可查看数据</span></div></div>
+  <div class="chart"><h3>每月数量趋势</h3>${lineChart(monthlyQty(logs),{color:"#5aa9ff",gid:"gmq",unit:"月末结存",monthly:true,limit:120,empty:"暂无每月数量记录"})}
+   <div class="legend"><span>每月最后一次录入的结存数量（月末库存）</span><span>最多展示 120 个月</span><span>鼠标移到图上任意位置即可查看数据</span></div></div>
   <div class="chart"><h3>每日用量 / 入库</h3>${barChart(usage)}
-   <div class="legend"><span>蓝：用量 = 上一条数量 − 当日数量</span><span>绿：数量增加按入库/补货计，不算用量</span><span>近 30 天入库合计 ${inTotal}</span><span>最近 30 天</span></div></div>
-  <div class="chart"><h3>每月用量趋势</h3>${lineChart(monthlyUsage(usage),{color:"#c79bff",gid:"gmu",monthly:true,limit:120,empty:"暂无每月用量记录"})}
-   <div class="legend"><span>当月每日用量合计</span><span>入库/补货不计入用量</span><span>最多展示 120 个月</span></div></div>`;
+   <div class="legend"><span>蓝：用量 = 上一条数量 − 当日数量</span><span>绿：数量增加按入库/补货计，不算用量</span><span>悬停整列可看当日用量与入库</span><span>2026-11 前的首次录入按建立库存计，不计入库</span><span>近 30 天入库合计 ${inTotal}</span></div></div>
+  <div class="chart"><h3>每月用量趋势</h3>${lineChart(monthlyUsage(usage),{color:"#c79bff",gid:"gmu",unit:"用量",monthly:true,limit:120,empty:"暂无每月用量记录"})}
+   <div class="legend"><span>当月每日用量合计</span><span>入库/补货不计入用量</span><span>最多展示 120 个月</span><span>鼠标移到图上任意位置即可查看数据</span></div></div>`;
 }
 
 (async function init(){
@@ -1789,9 +2186,13 @@ function renderStock(p,d){
     if(tr)loadStockDetail(id,tr);
    },900);
   }
+ }else if(qs.indexOf("about")>=0){
+  go("about"); // 可选直达：/?page=about
  }
 })();
 </script>
 </body></html>)PAGE2";
+    // 与 PC 端「关于」一致：版本号即构建日期（安装包内 version.txt 优先）
+    page.replace("__BUILD_DATE__", UpdateManager::instance().localVersion().toUtf8());
     return page;
 }

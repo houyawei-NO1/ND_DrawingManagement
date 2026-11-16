@@ -34,17 +34,17 @@ private val MenuBarActiveText = Color(0xFF8FC6F2)
 
 private data class MenuEntry(val route: String, val label: String)
 
-// 主页 / 扫描 / 设置：与路由名一致，用 current 决定哪一项高亮
-// 「同步」已改名为「设置」，原同步功能作为设置下的「数据同步」子页面
+// 主页 / 库存 / 扫描 / 设置：库存紧跟主界面之后，与路由名一致
 private val MENU_ENTRIES = listOf(
     MenuEntry("list", "主页"),
+    MenuEntry("stock", "库存"),
     MenuEntry("scan", "扫描"),
     MenuEntry("settings", "设置"),
 )
 
 /**
- * 顶部菜单栏：深色条 + 纯文字菜单项，当前页常驻高亮（蓝色底 + 底部亮蓝线），
- * 风格对齐 PC 端主界面 menubar。主页 / 扫描 / 设置 三个页面共用。
+ * 顶部菜单栏：深色条 + 纯文字菜单项，当前页常驻高亮（蓝色底 + 底部亮蓝线）。
+ * 菜单项较多，字号与左右间距略收紧，保证窄屏也能一行放下。
  */
 @Composable
 fun AppMenuBar(current: String, nav: NavHostController, onAbout: () -> Unit) {
@@ -66,7 +66,7 @@ fun AppMenuBar(current: String, nav: NavHostController, onAbout: () -> Unit) {
         // 标题占据剩余宽度，空间不足时省略，保证右侧菜单项始终可见
         Text(
             "南都图纸",
-            fontSize = 14.sp,
+            fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             color = MenuBarText,
             maxLines = 1,
@@ -120,10 +120,10 @@ private fun MenuBarItem(text: String, active: Boolean, onClick: () -> Unit) {
     ) {
         Text(
             text,
-            fontSize = 14.sp,
+            fontSize = 13.sp,
             color = if (active) MenuBarActiveText else MenuBarText,
             maxLines = 1,
-            modifier = Modifier.padding(horizontal = 14.dp)
+            modifier = Modifier.padding(horizontal = 9.dp)
         )
     }
 }

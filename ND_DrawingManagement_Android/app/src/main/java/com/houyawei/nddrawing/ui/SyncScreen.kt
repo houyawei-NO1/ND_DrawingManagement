@@ -19,6 +19,8 @@ import com.houyawei.nddrawing.data.DEFAULT_CATEGORIES
 import com.houyawei.nddrawing.data.Drawing
 import com.houyawei.nddrawing.data.Repository
 import com.houyawei.nddrawing.data.SyncClient
+import com.houyawei.nddrawing.util.DEFAULT_SERVER_HOST
+import com.houyawei.nddrawing.util.DEFAULT_SERVER_PORT
 import com.houyawei.nddrawing.util.StoragePermission
 import com.houyawei.nddrawing.util.UsbSync
 import kotlinx.coroutines.launch
@@ -29,8 +31,8 @@ import java.util.*
 fun SyncScreen(nav: NavHostController) {
     val ctx = LocalContext.current
     val prefs = ctx.getSharedPreferences("sync", Context.MODE_PRIVATE)
-    var host by remember { mutableStateOf(prefs.getString("host", "") ?: "") }
-    var port by remember { mutableStateOf(prefs.getString("port", "8080") ?: "8080") }
+    var host by remember { mutableStateOf(prefs.getString("host", DEFAULT_SERVER_HOST) ?: DEFAULT_SERVER_HOST) }
+    var port by remember { mutableStateOf(prefs.getString("port", DEFAULT_SERVER_PORT) ?: DEFAULT_SERVER_PORT) }
     var history by remember { mutableStateOf(readHosts(prefs)) }
     var status by remember { mutableStateOf("") }
     var syncing by remember { mutableStateOf(false) }
@@ -39,7 +41,7 @@ fun SyncScreen(nav: NavHostController) {
     var skipped by remember { mutableStateOf(0) }
     var downloaded by remember { mutableStateOf(0) }
     var failed by remember { mutableStateOf(0) }
-    // 同步流程阶段：input（填写 IP/选择导入方式）/ downloading（下载中）
+    // 同步流程阶段：input（填写 IP/选择同步方式）/ downloading（下载中）
     var syncPhase by remember { mutableStateOf("input") }
     // 按分类勾选要下载的图纸文件：未勾选的分类只同步数据库（图纸清单），不下载文件。
     // 选择持久化，避免每次进页面都要重选；默认全不选，防止一次性下载服务器全部图纸。
@@ -69,7 +71,7 @@ fun SyncScreen(nav: NavHostController) {
         mainHandler.post { logs.add(line) }
     }
 
-    // 执行下载：所有下载逻辑共用（手动选中 / USB 导入全量）。在调用协程内挂起执行。
+    // 执行下载：所有下载逻辑共用（手动选中 / USB 同步全量）。在调用协程内挂起执行。
     suspend fun performDownload(list: List<Drawing>) {
         try {
             syncing = true
@@ -114,8 +116,8 @@ fun SyncScreen(nav: NavHostController) {
             progress = -1f
             if (failed > 0) {
                 syncPhase = "input"
-                status = "下载完成：新增/更新 $downloaded，跳过 $skipped，失败 $failed。再次点击「无线导入」可续传（已下载的会自动跳过）。"
-                logLine("下载结束：成功 $downloaded，跳过 $skipped，失败 $failed。失败项可再次导入续传。")
+                status = "下载完成：新增/更新 $downloaded，跳过 $skipped，失败 $failed。再次点击「无线同步」可续传（已下载的会自动跳过）。"
+                logLine("下载结束：成功 $downloaded，跳过 $skipped，失败 $failed。失败项可再次同步续传。")
             } else {
                 status = "同步完成：图纸 ${list.size} 张（新增/更新 $downloaded，已存在跳过 $skipped）"
                 logLine("同步完成：全部成功（下载 $downloaded，跳过 $skipped）")
@@ -131,9 +133,9 @@ fun SyncScreen(nav: NavHostController) {
         }
     }
 
-    // 无线导入：从电脑拉取数据库；勾选「图纸」时连全部图纸一起下载，未勾选则只同步数据库内容
+    // 无线同步：从电脑拉取数据库；勾选「图纸」时连全部图纸一起下载，未勾选则只同步数据库内容
     fun connectAndFetch() {
-        if (host.isBlank()) { status = "请输入电脑端 IP"; return }
+        if (host.isBlank()) { status = "请输入服务器IP"; return }
         scope.launch {
             try {
                 syncing = true
@@ -141,7 +143,7 @@ fun SyncScreen(nav: NavHostController) {
                 progress = -1f
                 phase = "连接中……"
                 logs.clear()
-                logLine("开始无线导入 → http://$host:$port")
+                logLine("开始无线同步 → http://$host:$port")
                 val client = SyncClient("http://$host:$port")
                 val schema = client.fetchSchema()
                 val localSchema = prefs.getInt("schema", -1)
@@ -154,6 +156,14 @@ fun SyncScreen(nav: NavHostController) {
                 val products = client.fetchProducts("")
                 products.forEach { Repository.db.upsertProduct(it) }
                 logLine("产品列表已同步：${products.size} 条，已写入本地库")
+                phase = "正在拉取每日数量……"
+                val qtyLogs = client.fetchQtyLogs("")
+                // 旧版 PC 端没有该接口时返回空列表，此时保留本地已有日志，保证离线库存页仍可用
+                if (qtyLogs.isNotEmpty()) Repository.db.replaceQtyLogs(qtyLogs)
+                logLine(
+                    if (qtyLogs.isEmpty()) "每日数量未获取到（PC 端可能为旧版本），保留本地已有记录"
+                    else "每日数量已同步：${qtyLogs.size} 条"
+                )
                 phase = "正在拉取分类……"
                 val cats = client.fetchCategories()
                 Repository.db.saveCategories(cats)
@@ -196,15 +206,15 @@ fun SyncScreen(nav: NavHostController) {
                     performDownload(toDownload)
                 }
             } catch (e: Exception) {
-                status = "无线导入失败：${e.message}"
-                logLine("无线导入失败：${e.message}")
+                status = "无线同步失败：${e.message}"
+                logLine("无线同步失败：${e.message}")
             } finally {
                 syncing = false
             }
         }
     }
 
-    // USB 导入：通过 USB 网络共享自动查找电脑并全量下载（无需手动复制/输入 IP）
+    // USB 同步：通过 USB 网络共享自动查找电脑并全量下载（无需手动复制/输入 IP）
     fun doUsbImport() {
         if (syncing) return
         scope.launch {
@@ -218,7 +228,7 @@ fun SyncScreen(nav: NavHostController) {
                 val h = UsbSync.findHost(ctx, host, portNum)
                 if (h == null) {
                     status = "未找到电脑。请先用 USB 数据线连上电脑，并在手机端开启「USB 网络共享」（设置→连接→USB 网络共享，手机当热点），" +
-                            "或在下方「无线导入」里填写电脑地址后导入。"
+                            "或在下方「无线同步」里填写服务器地址后同步。"
                     logLine("未找到电脑：USB 子网内无 8080 可达主机，且已保存 IP 不可达")
                     syncing = false
                     return@launch
@@ -239,6 +249,13 @@ fun SyncScreen(nav: NavHostController) {
                 val products = client.fetchProducts("")
                 products.forEach { Repository.db.upsertProduct(it) }
                 logLine("产品列表已同步：${products.size} 条")
+                phase = "正在拉取每日数量…"
+                val qtyLogs = client.fetchQtyLogs("")
+                if (qtyLogs.isNotEmpty()) Repository.db.replaceQtyLogs(qtyLogs)
+                logLine(
+                    if (qtyLogs.isEmpty()) "每日数量未获取到（PC 端可能为旧版本），保留本地已有记录"
+                    else "每日数量已同步：${qtyLogs.size} 条"
+                )
                 phase = "正在拉取分类与字段配置…"
                 val cats = client.fetchCategories()
                 Repository.db.saveCategories(cats)
@@ -252,15 +269,15 @@ fun SyncScreen(nav: NavHostController) {
                 ds.filter { categoryOf(it) !in selectedCats }.forEach { Repository.db.upsertDrawingKeepLocal(it) }
                 logLine("图纸清单已拉取：${ds.size} 张，按勾选分类下载 ${toDownload.size} 张，其余仅写数据库")
                 if (toDownload.isEmpty()) {
-                    status = "USB 导入完成：仅同步数据库，图纸清单 ${ds.size} 条（未勾选下载分类）"
+                    status = "有线同步完成：仅同步数据库，图纸清单 ${ds.size} 条（未勾选下载分类）"
                     nav.navigate("list") { popUpTo("settings/sync") { inclusive = true } }
                 } else {
                     phase = "USB 已连接，正在下载勾选分类的图纸…"
                     performDownload(toDownload) // 下载完成后自动跳转主页
                 }
             } catch (e: Exception) {
-                status = "USB网络共享导入失败：${e.message}"
-                logLine("USB网络共享导入失败：${e.message}")
+                status = "有线同步失败：${e.message}"
+                logLine("有线同步失败：${e.message}")
                 syncing = false
             }
         }
@@ -293,14 +310,14 @@ fun SyncScreen(nav: NavHostController) {
                 Text("授予存储权限，改存到 Download/南都图纸")
             }
         }
-        // ===== 无线导入 =====
+        // ===== 无线同步 =====
         Spacer(Modifier.height(16.dp))
-        Text("无线导入", style = MaterialTheme.typography.titleSmall)
+        Text("无线同步", style = MaterialTheme.typography.titleSmall)
 
         if (syncPhase != "downloading") {
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
-                host, { host = it }, label = { Text("电脑端 IP") },
+                host, { host = it }, label = { Text("服务器IP") },
                 singleLine = true, modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(8.dp))
@@ -360,7 +377,7 @@ fun SyncScreen(nav: NavHostController) {
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                "只有勾选的分类会下载图纸文件；未勾选的分类只同步数据库（产品、分类、图纸清单），不下载文件。无线 / 有线导入均按此设置。",
+                "只有勾选的分类会下载图纸文件；未勾选的分类只同步数据库（产品、分类、图纸清单），不下载文件。无线 / 有线同步均按此设置。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -369,10 +386,10 @@ fun SyncScreen(nav: NavHostController) {
                 onClick = { connectAndFetch() },
                 enabled = !syncing,
                 modifier = Modifier.fillMaxWidth()
-            ) { Text(if (syncing) "导入中……" else "无线导入") }
+            ) { Text(if (syncing) "同步中……" else "无线同步") }
             Spacer(Modifier.height(4.dp))
             Text(
-                "使用无线导入时关闭手机移动网络增加传输效率。",
+                "使用无线同步时关闭手机移动网络增加传输效率。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -388,17 +405,17 @@ fun SyncScreen(nav: NavHostController) {
             Text(status, style = MaterialTheme.typography.bodyMedium)
         }
 
-        // ===== 有线导入（放在主页按钮上方） =====
+        // ===== 有线同步（放在主页按钮上方） =====
         Spacer(Modifier.height(20.dp))
         Button(
             onClick = { doUsbImport() },
             enabled = !syncing,
             modifier = Modifier.fillMaxWidth()
-        ) { Text("有线导入") }
+        ) { Text("有线同步") }
         Spacer(Modifier.height(4.dp))
         Text(
             "用 USB 数据线连接电脑，并在手机「设置→连接→USB 网络共享」中开启（手机当热点），" +
-                    "App 会自动在本机 USB 子网里找到电脑并导入全部图纸。",
+                    "App 会自动在本机 USB 子网里找到电脑并同步全部图纸。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -426,7 +443,7 @@ fun SyncScreen(nav: NavHostController) {
                 .padding(10.dp)
         ) {
             Text(
-                if (logs.isEmpty()) "（导入后，这里显示传输详情、跳过与重连情况）"
+                if (logs.isEmpty()) "（同步后，这里显示传输详情、跳过与重连情况）"
                 else logs.joinToString("\n"),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
