@@ -122,7 +122,12 @@ ToolsPage::ToolsPage(QWidget *parent) : QWidget(parent)
     setWindowTitle(QStringLiteral("工具"));
 
     QVBoxLayout *root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
     m_tabs = new QTabWidget(this);
+    m_tabs->setObjectName(QStringLiteral("darkMenuTabs"));
+    m_tabs->setAttribute(Qt::WA_StyledBackground, true);
+    m_tabs->tabBar()->setAttribute(Qt::WA_StyledBackground, true);
     m_tabs->addTab(buildStockPage(), QStringLiteral("库存查询"));
     m_chipPage = new ChipQueryPage(this);
     m_tabs->addTab(m_chipPage, QStringLiteral("芯片查询"));
@@ -656,6 +661,26 @@ QWidget *ToolsPage::buildAboutPage()
     notifyTip->setObjectName(QStringLiteral("previewInfo"));
     notifyTip->setWordWrap(true);
 
+    // 每日更新通知：到点查询服务器版本，有新版本时右下角提示是否更新
+    m_chkUpdateNotify = new QCheckBox(QStringLiteral("更新通知"), card);
+    m_chkUpdateNotify->setStyleSheet(ctrlQss);
+    m_chkUpdateNotify->setCursor(Qt::PointingHandCursor);
+    m_chkUpdateNotify->setChecked(cfg.value(AutoStart::updateEnabledKey(), true).toBool());
+
+    m_edtUpdateTime = new QTimeEdit(card);
+    m_edtUpdateTime->setDisplayFormat(QStringLiteral("HH:mm"));
+    m_edtUpdateTime->setTime(AutoStart::configuredUpdateTime());
+    m_edtUpdateTime->setFixedWidth(86);
+    m_edtUpdateTime->setEnabled(m_chkUpdateNotify->isChecked());
+    m_edtUpdateTime->setStyleSheet(m_edtNotifyTime->styleSheet());
+    m_edtUpdateTime->setToolTip(QStringLiteral(
+        "每天到该时刻检查服务器是否有新版本，有则在屏幕右下角提示是否更新；"
+        "修改后按新时刻生效，当天已经过去的时刻不再补提醒"));
+
+    QLabel *updateTip = new QLabel(QStringLiteral("每天检查服务器新版本，有更新时右下角提醒"), card);
+    updateTip->setObjectName(QStringLiteral("previewInfo"));
+    updateTip->setWordWrap(true);
+
     QHBoxLayout *autoRunRow = new QHBoxLayout();
     autoRunRow->addWidget(m_chkAutoRun);
     autoRunRow->addWidget(autoRunTip, 1);
@@ -663,6 +688,10 @@ QWidget *ToolsPage::buildAboutPage()
     notifyRow->addWidget(m_chkDailyNotify);
     notifyRow->addWidget(m_edtNotifyTime);
     notifyRow->addWidget(notifyTip, 1);
+    QHBoxLayout *updateRow = new QHBoxLayout();
+    updateRow->addWidget(m_chkUpdateNotify);
+    updateRow->addWidget(m_edtUpdateTime);
+    updateRow->addWidget(updateTip, 1);
 
     QVBoxLayout *runLay = new QVBoxLayout();
     runLay->setContentsMargins(0, 0, 0, 0);
@@ -677,6 +706,7 @@ QWidget *ToolsPage::buildAboutPage()
     runLay->addWidget(runTitle);
     runLay->addLayout(autoRunRow);
     runLay->addLayout(notifyRow);
+    runLay->addLayout(updateRow);
     runLay->addWidget(trayTip);
     cl->addLayout(runLay);
     cl->addSpacing(10);
@@ -703,6 +733,18 @@ QWidget *ToolsPage::buildAboutPage()
     connect(m_edtNotifyTime, &QTimeEdit::timeChanged, this, [this](const QTime &t) {
         QSettings s;
         s.setValue(AutoStart::notifyTimeKey(), t.toString(QStringLiteral("HH:mm")));
+        s.sync();
+    });
+    connect(m_chkUpdateNotify, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_edtUpdateTime)
+            m_edtUpdateTime->setEnabled(on);
+        QSettings s;
+        s.setValue(AutoStart::updateEnabledKey(), on);
+        s.sync();
+    });
+    connect(m_edtUpdateTime, &QTimeEdit::timeChanged, this, [this](const QTime &t) {
+        QSettings s;
+        s.setValue(AutoStart::updateTimeKey(), t.toString(QStringLiteral("HH:mm")));
         s.sync();
     });
 

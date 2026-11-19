@@ -33,12 +33,14 @@ class QHttpServerRequest;
 //   POST /api/auth/login → 校验账号密码，返回 token 与角色（账号只在服务器主机维护）
 //   POST /api/data       → 只读查询（action 分发，无需 token；含 list_op_logs 用户操作日志）
 //   POST /api/write      → 写操作（action 分发，必须带有效 token，服务端统一落盘）
-// 版本管理（安装包只保存在服务器「工作路径/安装包」，PC 与手机 APK 各只保留一份）：
-//   POST /api/update/info             → 当前 PC 安装包版本信息
-//   POST /api/update/upload           → 按 1MB 分块上传（需 token，body 的 kind=pc|android）
+// 版本管理（安装包只保存在服务器「工作路径/安装包」）：
+//   POST /api/update/info             → 版本信息（body 的 kind=pc|android|device，device 可带 arch=x86|x64）
+//   POST /api/update/upload           → 按 1MB 分块上传（需 token，body 的 kind + arch）
 //   GET  /api/update/package          → 下载当前 PC 安装包
 //   GET  /api/update/android/info     → 当前手机 APK 版本信息（手机 APP 检查更新用）
 //   GET  /api/update/android/package  → 下载当前手机 APK
+//   GET  /api/update/device/info?arch=x86|x64       → 下线机对应位数版本信息（免登录）
+//   GET  /api/update/device/package?arch=x86|x64    → 下载下线机对应位数 exe（免登录）
 class LanHttpServer : public QObject
 {
 Q_OBJECT
@@ -99,6 +101,7 @@ private:
 
     // 客户端接口：登录 token / 只读查询 / 带鉴权的写操作
     QHttpServerResponse handleLogin(const QHttpServerRequest &req);
+    QHttpServerResponse handleDeviceAuth(const QHttpServerRequest &req);
     QHttpServerResponse handleData(const QHttpServerRequest &req);
     QHttpServerResponse handleWrite(const QHttpServerRequest &req);
     bool validToken(const QString &token) const;
@@ -106,11 +109,14 @@ private:
     // 版本管理：版本信息 / 安装包分块上传 / 安装包下载（PC 与手机 APK 各一份）
     QHttpServerResponse handleUpdateInfo(const QHttpServerRequest &req);
     QHttpServerResponse handleUpdateUpload(const QHttpServerRequest &req);
-    QHttpServerResponse handleUpdatePackage() const;
+    QHttpServerResponse handleUpdatePackage(const QHttpServerRequest &req) const;
     QHttpServerResponse handleAndroidInfo() const;
     QHttpServerResponse handleAndroidPackage() const;
+    QHttpServerResponse handleDeviceInfo(const QHttpServerRequest &req) const;
+    QHttpServerResponse handleDevicePackage(const QHttpServerRequest &req) const;
     QString m_uploadName;
     QString m_uploadKind = QStringLiteral("pc");
+    QString m_uploadArch;
     QString m_uploadVersion;
     QString m_uploadStamp;
     qint64 m_uploadOffset = 0;

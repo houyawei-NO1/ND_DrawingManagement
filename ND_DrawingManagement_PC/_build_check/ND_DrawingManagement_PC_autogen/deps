@@ -10,11 +10,13 @@ ND_DrawingManagement_PC_autogen/timestamp: \
 	D:/Qt/6.8.3/mingw_64/include/QtCore/QPair \
 	D:/Qt/6.8.3/mingw_64/include/QtCore/QPointer \
 	D:/Qt/6.8.3/mingw_64/include/QtCore/QRect \
+	D:/Qt/6.8.3/mingw_64/include/QtCore/QRegularExpression \
 	D:/Qt/6.8.3/mingw_64/include/QtCore/QSize \
 	D:/Qt/6.8.3/mingw_64/include/QtCore/QSizeF \
 	D:/Qt/6.8.3/mingw_64/include/QtCore/QString \
 	D:/Qt/6.8.3/mingw_64/include/QtCore/QStringList \
 	D:/Qt/6.8.3/mingw_64/include/QtCore/QTimer \
+	D:/Qt/6.8.3/mingw_64/include/QtCore/QtGlobal \
 	D:/Qt/6.8.3/mingw_64/include/QtCore/q20functional.h \
 	D:/Qt/6.8.3/mingw_64/include/QtCore/q20iterator.h \
 	D:/Qt/6.8.3/mingw_64/include/QtCore/q20memory.h \
@@ -741,6 +743,8 @@ ND_DrawingManagement_PC_autogen/timestamp: \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/chipquerypage.h \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/codeconvertpage.cpp \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/codeconvertpage.h \
+	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/cuttaskpage.cpp \
+	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/cuttaskpage.h \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/dataentrynotify.cpp \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/dataentrynotify.h \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/entrydialog.cpp \
@@ -751,6 +755,12 @@ ND_DrawingManagement_PC_autogen/timestamp: \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/managepage.h \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/materialcodedialog.cpp \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/materialcodedialog.h \
+	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/moldquerypage.cpp \
+	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/moldquerypage.h \
+	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/moldterminalpage.cpp \
+	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/moldterminalpage.h \
+	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/ndinputdialog.cpp \
+	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/ndinputdialog.h \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/ndmessagebox.cpp \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/ndmessagebox.h \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/ocrhelper.h \
@@ -772,7 +782,9 @@ ND_DrawingManagement_PC_autogen/timestamp: \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/updatedialog.h \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/autostart.h \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/chiptypes.h \
+	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/cuttypes.h \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/modelcodec.h \
+	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/moldtypes.h \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/singleinstance.cpp \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/singleinstance.h \
 	E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/stocktypes.h \

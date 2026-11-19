@@ -55,10 +55,12 @@ private:
     // 芯片查询
     ChipQueryPage *m_chipPage = nullptr;
 
-    // 关于页：开机启动、每日数据录入通知
+    // 关于页：开机启动、每日数据录入通知、每日更新通知
     QCheckBox *m_chkAutoRun = nullptr;
     QCheckBox *m_chkDailyNotify = nullptr;
     QTimeEdit *m_edtNotifyTime = nullptr;
+    QCheckBox *m_chkUpdateNotify = nullptr;
+    QTimeEdit *m_edtUpdateTime = nullptr;
 };
 
 #endif // TOOLSPAGE_H

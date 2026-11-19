@@ -35,6 +35,10 @@ class EntryDialog;
 class ManagePage;
 class SettingsDialog;
 class ToolsPage;
+class MoldTerminalPage;
+class MoldQueryPage;
+class CutTaskPage;
+struct UpdateInfo;
 
 // 主窗口：无边框深色风格，分类Tab + 搜索 + 列表 + 图纸预览
 class MainWindow : public QWidget
@@ -58,6 +62,8 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private slots:
+    void onPrimaryMenuClicked(int id);   // 一级菜单：图纸 / 线束 / 工具 / 设置（网页为外链不入组）
+    void onSubMenuClicked(int page);     // 二级子页：直接切到 m_stack 指定页
     void onSearch();
     void onCategoryChanged(int index);
     void onRowSelected(int row, int column);
@@ -68,9 +74,13 @@ private slots:
     void onSupplementClicked(); // 选中的记录带入录入页补充信息
     void refreshSyncStatus();   // 定时刷新局域网同步状态栏
     void checkDailyQtyNotify(); // 每分钟检查是否到每日数量录入提醒时间
+    void checkUpdateNotify();   // 每分钟检查是否到每日更新通知时刻
 
 private:
     void buildTitleBar();
+    void buildSubMenuBar();     // 二级菜单栏：图纸/线束 各自的业务子页
+    void navigateToPage(int pageIndex, bool checkLogin = true); // 统一页跳转（含登录拦截与菜单选中态）
+    void syncMenuButtons(int pageIndex); // 按当前页同步一级/二级按钮选中态
     void buildSystemTray();     // 关闭后隐藏到后台：托盘图标用于恢复界面 / 真正退出
     void buildCategoryTabs();
     void buildToolBar();
@@ -88,6 +98,7 @@ private:
     void clearClientCache();              // 客户端：清理本机图纸预览缓存
     void applyStyle();
     void showDailyQtyNotify();  // 右下角无遮罩通知（不用 OverlayMask 全屏黑幕）
+    void showUpdateNotify(const UpdateInfo &info); // 右下角更新通知：确认后打开更新窗口
 
     // 图片拖入 → 异步 OCR → 多型号一次性搜索
     void onImageDropped(const QString &path);
@@ -102,8 +113,13 @@ private:
     QSystemTrayIcon *m_tray = nullptr;
     bool m_restarting = false; // 切换角色重启中：防止按钮连点启动多个进程
 
-    // 分类
-    QButtonGroup *m_menuGroup = nullptr; // 顶部菜单按钮组：id 与 m_stack 页索引一致（0主界面 1录入 2管理 3设置 4工具）
+    // 导航
+    // 一级菜单 id：0图纸 1线束 2工具 3设置（网页为外链，id=-1 不进组）
+    QButtonGroup *m_menuGroup = nullptr;
+    QStackedWidget *m_subBarStack = nullptr;  // 二级菜单栏：0图纸子栏 1线束子栏
+    QWidget *m_drawingSubBar = nullptr;
+    QWidget *m_wireSubBar = nullptr;
+    QButtonGroup *m_subGroup = nullptr;       // 二级子页按钮组：id = m_stack 页索引
     QButtonGroup *m_catGroup = nullptr;
     QString m_currentCat;
 
@@ -136,7 +152,8 @@ private:
     QLabel *m_previewInfo = nullptr;
     QString m_currentPreviewFile;
     QPixmap m_previewPix;  // 当前图纸原图，预览框尺寸变化时据此重新缩放
-    QSize m_pdfFitSize;    // 上次 PDF 适配时的预览框尺寸，避免重复重排
+    QSize m_pdfFitSize;         // 上次 PDF 适配时的预览框尺寸，避免重复重排
+    bool m_pdfRefitting = false; // refit 重入保护，防止 resize↔refit 死循环
 
     // 详情
     QTextBrowser *m_extFieldView = nullptr; // 分类特有字段（护套针数/硬件版本号等）
@@ -179,12 +196,20 @@ private:
     QDateTime m_lastNotifyCheck; // 上次检查时刻，用于判断是否刚跨过设定时刻
     QPointer<DataEntryNotify> m_notify;
 
-    // 页面切换：0主界面 1录入 2管理 3设置 4工具
+    // 每日更新通知：到设定时刻查服务器版本，有新版本则右下角提示
+    QTimer *m_updateTimer = nullptr;
+    QDateTime m_lastUpdateCheck;
+    QPointer<DataEntryNotify> m_updateNotify;
+
+    // 页面切换：0图纸查询 1录入 2管理 3设置 4工具 5模具端子 6下线任务
     QStackedWidget *m_stack = nullptr;
     EntryDialog *m_entryPage = nullptr;
     ManagePage *m_managePage = nullptr;
     SettingsDialog *m_settingsPage = nullptr;
     ToolsPage *m_toolsPage = nullptr;
+    MoldTerminalPage *m_moldPage = nullptr;      // 模具端子录入（页5）
+    MoldQueryPage *m_moldQueryPage = nullptr;    // 模具端子查询（页7）
+    CutTaskPage *m_cutTaskPage = nullptr;
 };
 
 #endif // MAINWINDOW_H

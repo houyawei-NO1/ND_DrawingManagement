@@ -7,6 +7,7 @@ E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/_build_che
   D:/Qt/6.8.3/mingw_64/include/QtCore/QSize \
   D:/Qt/6.8.3/mingw_64/include/QtCore/QSizeF \
   D:/Qt/6.8.3/mingw_64/include/QtCore/QString \
+  D:/Qt/6.8.3/mingw_64/include/QtCore/QStringList \
   D:/Qt/6.8.3/mingw_64/include/QtCore/q20functional.h \
   D:/Qt/6.8.3/mingw_64/include/QtCore/q20iterator.h \
   D:/Qt/6.8.3/mingw_64/include/QtCore/q20memory.h \

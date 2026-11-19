@@ -838,3 +838,228 @@ bool RemoteApiClient::chipDelete(int id, QString *err)
     args[QStringLiteral("id")] = id;
     return !writeAction(QStringLiteral("chip_write"), args, err).isEmpty();
 }
+
+// ==================== 端子机模具台账 ====================
+QList<MoldItem> RemoteApiClient::moldSearch(const QString &keyword, const QString &status,
+                                            int limit, int *total, QString *err) const
+{
+    if (total) *total = 0;
+    QJsonObject args;
+    args[QStringLiteral("keyword")] = keyword;
+    args[QStringLiteral("status")] = status;
+    args[QStringLiteral("limit")] = limit;
+    const QJsonObject res = readAction(QStringLiteral("mold_query"), args, err);
+    if (total) *total = res.value(QStringLiteral("total")).toInt();
+    QList<MoldItem> out;
+    for (const QJsonValue &v : res.value(QStringLiteral("items")).toArray())
+        out.append(MoldItem::fromJson(v.toObject()));
+    return out;
+}
+
+bool RemoteApiClient::moldSave(MoldItem *item, QString *err)
+{
+    if (!item)
+        return false;
+    QJsonObject args = item->toJson();
+    args[QStringLiteral("op")] = QStringLiteral("save");
+    const QJsonObject res = writeAction(QStringLiteral("mold_write"), args, err);
+    if (res.isEmpty())
+        return false;
+    if (item->id <= 0)
+        item->id = res.value(QStringLiteral("id")).toInt();
+    return true;
+}
+
+bool RemoteApiClient::moldDelete(int id, QString *err)
+{
+    QJsonObject args;
+    args[QStringLiteral("op")] = QStringLiteral("delete");
+    args[QStringLiteral("id")] = id;
+    return !writeAction(QStringLiteral("mold_write"), args, err).isEmpty();
+}
+
+// ==================== 线束下线 ====================
+QList<CutBatch> RemoteApiClient::cutBatches(QString *err) const
+{
+    const QJsonObject res = readAction(QStringLiteral("cut_query"),
+        QJsonObject{{QStringLiteral("what"), QStringLiteral("batches")}}, err);
+    QList<CutBatch> out;
+    for (const QJsonValue &v : res.value(QStringLiteral("items")).toArray())
+        out.append(CutBatch::fromJson(v.toObject()));
+    return out;
+}
+
+QList<CutItem> RemoteApiClient::cutItems(int batchId, QString *err) const
+{
+    QJsonObject args;
+    args[QStringLiteral("what")] = QStringLiteral("items");
+    args[QStringLiteral("batchId")] = batchId;
+    const QJsonObject res = readAction(QStringLiteral("cut_query"), args, err);
+    QList<CutItem> out;
+    for (const QJsonValue &v : res.value(QStringLiteral("items")).toArray())
+        out.append(CutItem::fromJson(v.toObject()));
+    return out;
+}
+
+int RemoteApiClient::cutImportBatch(const CutBatch &batch, const QList<CutItem> &items, QString *err)
+{
+    QJsonObject args = batch.toJson();
+    args[QStringLiteral("op")] = QStringLiteral("import_batch");
+    QJsonArray arr;
+    for (const CutItem &it : items) arr.append(it.toJson());
+    args[QStringLiteral("items")] = arr;
+    const QJsonObject res = writeAction(QStringLiteral("cut_write"), args, err);
+    if (res.isEmpty()) return -1;
+    return res.value(QStringLiteral("id")).toInt(-1);
+}
+
+bool RemoteApiClient::cutDeleteBatch(int batchId, QString *err)
+{
+    QJsonObject args;
+    args[QStringLiteral("op")] = QStringLiteral("delete_batch");
+    args[QStringLiteral("batchId")] = batchId;
+    return !writeAction(QStringLiteral("cut_write"), args, err).isEmpty();
+}
+
+QList<CutMachine> RemoteApiClient::cutMachines(QString *err) const
+{
+    const QJsonObject res = readAction(QStringLiteral("cut_query"),
+        QJsonObject{{QStringLiteral("what"), QStringLiteral("machines")}}, err);
+    QList<CutMachine> out;
+    for (const QJsonValue &v : res.value(QStringLiteral("items")).toArray())
+        out.append(CutMachine::fromJson(v.toObject()));
+    return out;
+}
+
+bool RemoteApiClient::cutSaveMachine(CutMachine *m, QString *err)
+{
+    if (!m) return false;
+    QJsonObject args = m->toJson();
+    args[QStringLiteral("op")] = QStringLiteral("save_machine");
+    const QJsonObject res = writeAction(QStringLiteral("cut_write"), args, err);
+    if (res.isEmpty()) return false;
+    if (m->id <= 0) m->id = res.value(QStringLiteral("id")).toInt();
+    return true;
+}
+
+QList<CutRule> RemoteApiClient::cutRules(QString *err) const
+{
+    const QJsonObject res = readAction(QStringLiteral("cut_query"),
+        QJsonObject{{QStringLiteral("what"), QStringLiteral("rules")}}, err);
+    QList<CutRule> out;
+    for (const QJsonValue &v : res.value(QStringLiteral("items")).toArray())
+        out.append(CutRule::fromJson(v.toObject()));
+    return out;
+}
+
+bool RemoteApiClient::cutSaveRule(CutRule *r, QString *err)
+{
+    if (!r) return false;
+    QJsonObject args = r->toJson();
+    args[QStringLiteral("op")] = QStringLiteral("save_rule");
+    const QJsonObject res = writeAction(QStringLiteral("cut_write"), args, err);
+    if (res.isEmpty()) return false;
+    if (r->id <= 0) r->id = res.value(QStringLiteral("id")).toInt();
+    return true;
+}
+
+bool RemoteApiClient::cutDeleteRule(int id, QString *err)
+{
+    QJsonObject args;
+    args[QStringLiteral("op")] = QStringLiteral("delete_rule");
+    args[QStringLiteral("id")] = id;
+    return !writeAction(QStringLiteral("cut_write"), args, err).isEmpty();
+}
+
+bool RemoteApiClient::cutDispatch(int batchId, int machineId, const QList<int> &itemIds,
+                                  int quantity, QString *err)
+{
+    QJsonObject args;
+    args[QStringLiteral("op")] = QStringLiteral("dispatch");
+    args[QStringLiteral("batchId")] = batchId;
+    args[QStringLiteral("machineId")] = machineId;
+    args[QStringLiteral("quantity")] = quantity;
+    QJsonArray arr;
+    for (int id : itemIds) arr.append(id);
+    args[QStringLiteral("itemIds")] = arr;
+    return !writeAction(QStringLiteral("cut_write"), args, err).isEmpty();
+}
+
+bool RemoteApiClient::cutAutoDispatch(int batchId, int quantity, int *fixedCount,
+                                      int *balancedCount, QString *err)
+{
+    QJsonObject args;
+    args[QStringLiteral("op")] = QStringLiteral("auto_dispatch");
+    args[QStringLiteral("batchId")] = batchId;
+    args[QStringLiteral("quantity")] = quantity;
+    const QJsonObject res = writeAction(QStringLiteral("cut_write"), args, err);
+    if (res.isEmpty()) return false;
+    if (fixedCount) *fixedCount = res.value(QStringLiteral("fixedCount")).toInt();
+    if (balancedCount) *balancedCount = res.value(QStringLiteral("balancedCount")).toInt();
+    return true;
+}
+
+bool RemoteApiClient::cutAutoDispatchPreview(int batchId, QList<CutTask> *tasks,
+                                             int *fixedCount, int *balancedCount, QString *err) const
+{
+    QJsonObject args;
+    args[QStringLiteral("what")] = QStringLiteral("preview_dispatch");
+    args[QStringLiteral("batchId")] = batchId;
+    const QJsonObject res = readAction(QStringLiteral("cut_query"), args, err);
+    if (res.isEmpty()) return false;
+    if (tasks) {
+        tasks->clear();
+        for (const QJsonValue &v : res.value(QStringLiteral("items")).toArray())
+            tasks->append(CutTask::fromJson(v.toObject()));
+    }
+    if (fixedCount) *fixedCount = res.value(QStringLiteral("fixedCount")).toInt();
+    if (balancedCount) *balancedCount = res.value(QStringLiteral("balancedCount")).toInt();
+    return true;
+}
+
+bool RemoteApiClient::cutCommitDispatch(int batchId, const QList<CutAssign> &assigns,
+                                        int quantity, QString *err)
+{
+    QJsonObject args;
+    args[QStringLiteral("op")] = QStringLiteral("commit_dispatch");
+    args[QStringLiteral("batchId")] = batchId;
+    args[QStringLiteral("quantity")] = quantity;
+    QJsonArray arr;
+    for (const CutAssign &a : assigns) arr.append(a.toJson());
+    args[QStringLiteral("assigns")] = arr;
+    return !writeAction(QStringLiteral("cut_write"), args, err).isEmpty();
+}
+
+bool RemoteApiClient::cutRetask(int taskId, int machineId, QString *err)
+{
+    QJsonObject args;
+    args[QStringLiteral("op")] = QStringLiteral("retask");
+    args[QStringLiteral("taskId")] = taskId;
+    args[QStringLiteral("machineId")] = machineId;
+    return !writeAction(QStringLiteral("cut_write"), args, err).isEmpty();
+}
+
+QList<CutTask> RemoteApiClient::cutTasks(int batchId, int machineId, const QString &status,
+                                         QString *err) const
+{
+    QJsonObject args;
+    args[QStringLiteral("what")] = QStringLiteral("tasks");
+    args[QStringLiteral("batchId")] = batchId;
+    args[QStringLiteral("machineId")] = machineId;
+    args[QStringLiteral("status")] = status;
+    const QJsonObject res = readAction(QStringLiteral("cut_query"), args, err);
+    QList<CutTask> out;
+    for (const QJsonValue &v : res.value(QStringLiteral("items")).toArray())
+        out.append(CutTask::fromJson(v.toObject()));
+    return out;
+}
+
+bool RemoteApiClient::cutFinishTask(int taskId, int doneQty, const QString &operatorName, QString *err)
+{
+    QJsonObject args;
+    args[QStringLiteral("op")] = QStringLiteral("finish_task");
+    args[QStringLiteral("taskId")] = taskId;
+    args[QStringLiteral("doneQty")] = doneQty;
+    args[QStringLiteral("operator")] = operatorName;
+    return !writeAction(QStringLiteral("cut_write"), args, err).isEmpty();
+}

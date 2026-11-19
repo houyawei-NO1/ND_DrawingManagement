@@ -39,6 +39,9 @@ set(PROJECT_SOURCES
     ui/managepage.cpp
     ui/settingsdialog.cpp
     ui/toolspage.cpp
+    ui/moldterminalpage.cpp
+    ui/moldquerypage.cpp
+    ui/cuttaskpage.cpp
     ui/chipquerypage.cpp
     ui/codeconvertpage.cpp
     ui/dataentrynotify.cpp
@@ -48,6 +51,7 @@ set(PROJECT_SOURCES
     ui/ocrresultpopup.cpp
     ui/qtymanage.cpp
     ui/ndmessagebox.cpp
+    ui/ndinputdialog.cpp
     ui/roledialog.cpp
     ui/changelogdialog.cpp
     server/lanhttpserver.cpp
@@ -62,6 +66,8 @@ set(PROJECT_HEADERS
     model/product.h
     util/stocktypes.h
     util/chiptypes.h
+    util/moldtypes.h
+    util/cuttypes.h
     util/modelcodec.h
     util/autostart.h
     util/singleinstance.h
@@ -72,6 +78,9 @@ set(PROJECT_HEADERS
     ui/entrydialog.h
     ui/settingsdialog.h
     ui/toolspage.h
+    ui/moldterminalpage.h
+    ui/moldquerypage.h
+    ui/cuttaskpage.h
     ui/chipquerypage.h
     ui/codeconvertpage.h
     ui/dataentrynotify.h
@@ -82,6 +91,7 @@ set(PROJECT_HEADERS
     ui/ocrresultpopup.h
     ui/qtymanage.h
     ui/ndmessagebox.h
+    ui/ndinputdialog.h
     ui/roledialog.h
     ui/changelogdialog.h
     ui/overlaymask.h

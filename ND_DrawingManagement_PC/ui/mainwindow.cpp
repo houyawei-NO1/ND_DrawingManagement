@@ -4,6 +4,9 @@
 #include "managepage.h"
 #include "settingsdialog.h"
 #include "toolspage.h"
+#include "moldterminalpage.h"
+#include "moldquerypage.h"
+#include "cuttaskpage.h"
 #include "updatedialog.h"
 #include "server/lanhttpserver.h"
 #include "server/updatemanager.h"
@@ -70,6 +73,7 @@
 #include <QDir>
 #include <QContextMenuEvent>
 #include <QSet>
+#include <QHash>
 #include <QColor>
 #include <QPointer>
 #include <QImage>
@@ -89,10 +93,11 @@ const char *kGreen = "#43CF7C";
 MainWindow::MainWindow(QWidget *parent) : QWidget(parent)
 {
     setWindowFlags(Qt::FramelessWindowHint);
-    setWindowTitle(QStringLiteral("南都图纸管理"));
+    setWindowTitle(QStringLiteral("南都工作平台"));
     resize(1400, 860);
 
     buildTitleBar();
+    buildSubMenuBar();
     buildSystemTray();
     buildCategoryTabs();
     buildToolBar();
@@ -132,24 +137,29 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent)
     m_ocrPopup = new OcrResultPopup(page0);
     m_ocrPopup->hide();
 
-    // 页面1：录入；页面2：管理；页面3：设置；页面4：工具（库存查询 + 关于）
+    // 页面1录入 2管理 3设置 4工具 5模具端子 6下线任务
     m_entryPage = new EntryDialog(this);
     m_managePage = new ManagePage(this);
     m_settingsPage = new SettingsDialog(this);
     m_toolsPage = new ToolsPage(this);
+    m_moldPage = new MoldTerminalPage(this);
+    m_moldQueryPage = new MoldQueryPage(this);
+    m_cutTaskPage = new CutTaskPage(this);
 
     m_stack = new QStackedWidget(this);
-    m_stack->addWidget(page0);
-    m_stack->addWidget(m_entryPage);
-    m_stack->addWidget(m_managePage);
-    m_stack->addWidget(m_settingsPage);
-    m_stack->addWidget(m_toolsPage);
+    m_stack->addWidget(page0);              // 0 图纸查询
+    m_stack->addWidget(m_entryPage);        // 1 录入
+    m_stack->addWidget(m_managePage);       // 2 管理
+    m_stack->addWidget(m_settingsPage);     // 3 设置
+    m_stack->addWidget(m_toolsPage);        // 4 工具
+    m_stack->addWidget(m_moldPage);         // 5 模具端子录入
+    m_stack->addWidget(m_cutTaskPage);      // 6 下线任务
+    m_stack->addWidget(m_moldQueryPage);    // 7 模具端子查询
 
     // 管理页「修改」→ 跳转录入页编辑
     connect(m_managePage, &ManagePage::requestEditProduct, this, [this](int pid) {
         m_entryPage->loadProduct(pid);
-        m_stack->setCurrentIndex(1);
-        m_menuGroup->button(1)->setChecked(true);
+        navigateToPage(1, false);
     });
 
     QVBoxLayout *root = new QVBoxLayout(this);
@@ -162,17 +172,16 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent)
     titleLine->setObjectName(QStringLiteral("titleLine"));
     titleLine->setFixedHeight(1);
     root->addWidget(titleLine);
+    root->addWidget(m_subBarStack); // 二级菜单栏（图纸/线束时显示，工具/设置时隐藏）
     root->addWidget(m_stack, 1);
 
     // 录入页保存成功 / 取消 → 回到主界面并刷新列表
     connect(m_entryPage, &EntryDialog::saved, this, [this] {
         reloadTable();
-        m_stack->setCurrentIndex(0);
-        m_menuGroup->button(0)->setChecked(true);
+        navigateToPage(0, false);
     });
     connect(m_entryPage, &EntryDialog::cancelled, this, [this] {
-        m_stack->setCurrentIndex(0);
-        m_menuGroup->button(0)->setChecked(true);
+        navigateToPage(0, false);
     });
     // 编辑页逐张删除图纸后立即生效，同步刷新列表，避免残留已删图纸
     connect(m_entryPage, &EntryDialog::drawingsChanged, this, [this] {
@@ -193,6 +202,7 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent)
     });
 
     applyStyle();
+    syncMenuButtons(0);  // 初始落在图纸查询页：一级选中图纸、显示二级栏
     m_currentCat.clear(); // 默认「所有类别」：不限分类（与手机端首页一致）
     reloadTable();
 
@@ -258,6 +268,13 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent)
     connect(m_notifyTimer, &QTimer::timeout, this, &MainWindow::checkDailyQtyNotify);
     m_notifyTimer->start(60 * 1000);
     QTimer::singleShot(3000, this, &MainWindow::checkDailyQtyNotify);
+
+    // 每日更新通知：每分钟检查是否「刚跨过」设定时刻，到点查服务器版本
+    m_lastUpdateCheck = QDateTime::currentDateTime();
+    m_updateTimer = new QTimer(this);
+    m_updateTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_updateTimer, &QTimer::timeout, this, &MainWindow::checkUpdateNotify);
+    m_updateTimer->start(60 * 1000);
 }
 
 MainWindow::~MainWindow()
@@ -270,10 +287,16 @@ MainWindow::~MainWindow()
         m_syncTimer->stop();
     if (m_notifyTimer)
         m_notifyTimer->stop();
+    if (m_updateTimer)
+        m_updateTimer->stop();
     // 通知是独立顶层窗口，不是本窗口子对象，退出时需显式回收
     if (m_notify) {
         m_notify->disconnect();
         delete m_notify.data();
+    }
+    if (m_updateNotify) {
+        m_updateNotify->disconnect();
+        delete m_updateNotify.data();
     }
     const QList<QObject *> kids = findChildren<QObject *>();
     for (QObject *o : kids)
@@ -321,108 +344,51 @@ void MainWindow::buildTitleBar()
     QPixmap pm(QStringLiteral(":/image/logo.png"));
     if (!pm.isNull())
         logo->setPixmap(pm.scaled(50, 50, Qt::KeepAspectRatioByExpanding));
-    QLabel *title = new QLabel(QStringLiteral("南都图纸管理"), bar);
+    QLabel *title = new QLabel(QStringLiteral("南都工作平台"), bar);
     title->setObjectName(QStringLiteral("appTitle"));
     lay->addWidget(logo);
     lay->addWidget(title);
 
-    // 顶部菜单：主界面 / 库存 / 工具 / 录入 / 管理 / 设置。
-    // 按钮组 id 必须与 m_stack 页索引一致（0主界面 1录入 2管理 3设置 4工具）：
-    // 登录验证、通知跳转等多处用 button(m_stack->currentIndex()) 恢复选中态，
-    // 因此这里的显示顺序与 id 无关；「库存」不进按钮组，只负责打开浏览器。
+    // 一级菜单：图纸 / 线束 / 工具 / 网页 / 设置。
+    // 一级 id：0图纸 1线束 2工具 3设置；「网页」为外链，id=-1 不进按钮组。
+    // 图纸/线束各有二级子页（见 buildSubMenuBar），工具/设置无二级。
     QHBoxLayout *menuLay = new QHBoxLayout();
     menuLay->setSpacing(24);
     menuLay->setContentsMargins(50, 0, 0, 0);
     m_menuGroup = new QButtonGroup(this);
     m_menuGroup->setExclusive(true);
-    auto addMenuButton = [this, bar, menuLay](const QString &text, int pageId) {
+    auto addMenuButton = [this, bar, menuLay](const QString &text, int menuId) {
         QPushButton *b = new QPushButton(text, bar);
         b->setObjectName(QStringLiteral("menuBtn"));
         b->setFixedSize(80, 60);
-        b->setCheckable(pageId >= 0);
+        b->setCheckable(menuId >= 0);
         b->setFocusPolicy(Qt::NoFocus);
         b->setCursor(Qt::PointingHandCursor);
-        if (pageId >= 0) {
-            m_menuGroup->addButton(b, pageId);
-            if (pageId == 0) b->setChecked(true);
+        if (menuId >= 0) {
+            m_menuGroup->addButton(b, menuId);
+            if (menuId == 0) b->setChecked(true);
         } else {
-            b->setToolTip(QStringLiteral("在浏览器中打开网页端库存页面"));
+            b->setToolTip(QStringLiteral("在浏览器中打开网页端（图纸/库存/模具端子查询）"));
             connect(b, &QPushButton::clicked, this, [this]() {
                 if (m_accessUrl.isEmpty()) {
-                    NdMessageBox::information(this, QStringLiteral("网页端库存"),
+                    NdMessageBox::information(this, QStringLiteral("网页端"),
                         QStringLiteral("尚未获取到网页服务地址，请确认服务器程序已运行、客户端已配置服务器地址。"));
                     return;
                 }
-                // 网页端已支持 /?page=stock 直达库存页（自动切页并加载库存清单）
-                QDesktopServices::openUrl(QUrl(m_accessUrl + QStringLiteral("/?page=stock")));
+                QDesktopServices::openUrl(QUrl(m_accessUrl + QStringLiteral("/")));
             });
         }
         menuLay->addWidget(b, 0, Qt::AlignHCenter);
     };
-    addMenuButton(QStringLiteral("主界面"), 0);
-    addMenuButton(QStringLiteral("库存"), -1);
-    addMenuButton(QStringLiteral("工具"), 4);
-    addMenuButton(QStringLiteral("录入"), 1);
-    addMenuButton(QStringLiteral("管理"), 2);
+    addMenuButton(QStringLiteral("图纸"), 0);
+    addMenuButton(QStringLiteral("线束"), 1);
+    addMenuButton(QStringLiteral("工具"), 2);
+    addMenuButton(QStringLiteral("网页"), -1);
     addMenuButton(QStringLiteral("设置"), 3);
     lay->addLayout(menuLay);
     lay->addStretch();
 
-    connect(m_menuGroup, &QButtonGroup::idClicked, this, [this](int id) {
-        switch (id) {
-        case 0: // 主界面
-            m_stack->setCurrentIndex(0);
-            break;
-        case 1: // 录入：已登录直接进入，未登录先验证
-            if (!m_currentUser.isEmpty()) {
-                m_entryPage->resetForm();
-                m_stack->setCurrentIndex(1);
-            } else {
-                m_pwdTargetPage = 1;
-                m_pwdTitle->setText(QStringLiteral("录入验证"));
-                m_userEdit->clear();
-                m_pwdEdit->clear();
-                m_pwdError->clear();
-                m_pwdOverlay->showOverlay();
-                m_userEdit->setFocus();
-                m_menuGroup->button(m_stack->currentIndex())->setChecked(true);
-            }
-            break;
-        case 2: // 管理：账号密码正确即可修改，不再限定管理员角色
-            if (!m_currentUser.isEmpty()) {
-                m_managePage->refresh();
-                m_stack->setCurrentIndex(2);
-            } else {
-                m_pwdTargetPage = 2;
-                m_pwdTitle->setText(QStringLiteral("管理验证"));
-                m_userEdit->clear();
-                m_pwdEdit->clear();
-                m_pwdError->clear();
-                m_pwdOverlay->showOverlay();
-                m_userEdit->setFocus();
-                m_menuGroup->button(m_stack->currentIndex())->setChecked(true);
-            }
-            break;
-        case 3: // 设置：涉及数据库修改，同样要求登录
-            if (!m_currentUser.isEmpty()) {
-                m_stack->setCurrentIndex(3);
-            } else {
-                m_pwdTargetPage = 3;
-                m_pwdTitle->setText(QStringLiteral("设置验证"));
-                m_userEdit->clear();
-                m_pwdEdit->clear();
-                m_pwdError->clear();
-                m_pwdOverlay->showOverlay();
-                m_userEdit->setFocus();
-                m_menuGroup->button(m_stack->currentIndex())->setChecked(true);
-            }
-            break;
-        case 4: // 工具：只查询 ERP 存货档案，不改产品数据库，未登录用户也可直接使用
-            m_toolsPage->onPageShown();
-            m_stack->setCurrentIndex(4);
-            break;
-        }
-    });
+    connect(m_menuGroup, &QButtonGroup::idClicked, this, &MainWindow::onPrimaryMenuClicked);
 
     // 右侧信息列：登录状态 / 服务器地址 / 版本号三行统一放到「服务器」这一列，
     // 共用 #titleInfo 样式（登录标签的灰色 + 悬停绿色），行间距为 0
@@ -483,10 +449,134 @@ void MainWindow::buildTitleBar()
             return;
         }
         hide();
-        m_tray->showMessage(QStringLiteral("南都图纸管理"),
+        m_tray->showMessage(QStringLiteral("南都工作平台"),
             QStringLiteral("已隐藏到后台运行，点击托盘图标可重新打开界面。"),
             QSystemTrayIcon::Information, 3000);
     });
+}
+
+// 二级菜单栏：图纸（查询/录入/管理）、线束（模具端子/下线任务）；工具/设置无二级。
+// 两组各自一个容器，切换一级菜单时只显示对应组；按钮沿用工程原生 #catTab 样式。
+void MainWindow::buildSubMenuBar()
+{
+    m_subBarStack = new QStackedWidget(this);
+    m_subBarStack->setObjectName(QStringLiteral("subBarStack"));
+    m_subBarStack->setFixedHeight(48);
+
+    m_subGroup = new QButtonGroup(this);
+    m_subGroup->setExclusive(true);
+
+    auto makeBar = [this](const QString &name) {
+        QWidget *bar = new QWidget(m_subBarStack);
+        bar->setObjectName(name);
+        QHBoxLayout *lay = new QHBoxLayout(bar);
+        lay->setContentsMargins(24, 0, 10, 0);
+        lay->setSpacing(6);
+        return bar;
+    };
+    auto addSub = [this](QWidget *bar, const QString &text, int page) {
+        QPushButton *b = new QPushButton(text, bar);
+        b->setObjectName(QStringLiteral("catTab"));   // 与「所有类别/控制器」同款风格
+        b->setCheckable(true);
+        b->setFocusPolicy(Qt::NoFocus);
+        b->setCursor(Qt::PointingHandCursor);
+        b->setFixedWidth(170);   // 左对齐、固定宽，不再均分撑满整行
+        m_subGroup->addButton(b, page);
+        qobject_cast<QHBoxLayout *>(bar->layout())->addWidget(b);
+    };
+
+    m_drawingSubBar = makeBar(QStringLiteral("subDrawingBar"));
+    addSub(m_drawingSubBar, QStringLiteral("图纸查询"), 0);
+    addSub(m_drawingSubBar, QStringLiteral("图纸录入"), 1);
+    addSub(m_drawingSubBar, QStringLiteral("图纸管理"), 2);
+    qobject_cast<QHBoxLayout *>(m_drawingSubBar->layout())->addStretch(1);  // 右侧弹簧
+    m_subBarStack->addWidget(m_drawingSubBar);
+
+    m_wireSubBar = makeBar(QStringLiteral("subWireBar"));
+    addSub(m_wireSubBar, QStringLiteral("模具端子查询"), 7);
+    addSub(m_wireSubBar, QStringLiteral("模具端子管理"), 5);
+    addSub(m_wireSubBar, QStringLiteral("下线任务"), 6);
+    qobject_cast<QHBoxLayout *>(m_wireSubBar->layout())->addStretch(1);  // 右侧弹簧
+    m_subBarStack->addWidget(m_wireSubBar);
+
+    connect(m_subGroup, &QButtonGroup::idClicked, this, &MainWindow::onSubMenuClicked);
+    m_subBarStack->hide();
+}
+
+// 一级菜单点击：图纸→图纸查询页，线束→模具端子页，工具→工具页，设置→设置页。
+void MainWindow::onPrimaryMenuClicked(int id)
+{
+    switch (id) {
+    case 0: navigateToPage(0); break; // 图纸：默认图纸查询
+    case 1: navigateToPage(7); break; // 线束：默认模具端子查询（免登录）
+    case 2:                           // 工具：只读查询，免登录
+        m_toolsPage->onPageShown();
+        navigateToPage(4, false);
+        break;
+    case 3: navigateToPage(3); break; // 设置：要求登录
+    default: break;
+    }
+}
+
+void MainWindow::onSubMenuClicked(int page)
+{
+    navigateToPage(page);
+}
+
+// 统一页跳转：需要登录的页（1录入/2管理/3设置/5模具/6下线）未登录先弹验证。
+void MainWindow::navigateToPage(int pageIndex, bool checkLogin)
+{
+    const bool needLogin = (pageIndex == 1 || pageIndex == 2 || pageIndex == 3 ||
+                            pageIndex == 5 || pageIndex == 6);
+    if (checkLogin && needLogin && m_currentUser.isEmpty()) {
+        m_pwdTargetPage = pageIndex;
+        static const QHash<int, QString> titles = {
+            {1, QStringLiteral("录入验证")}, {2, QStringLiteral("管理验证")},
+            {3, QStringLiteral("设置验证")}, {5, QStringLiteral("线束部门验证")},
+            {6, QStringLiteral("线束部门验证")}, {7, QStringLiteral("线束部门验证")}
+        };
+        m_pwdTitle->setText(titles.value(pageIndex, QStringLiteral("登录验证")));
+        m_userEdit->clear();
+        m_pwdEdit->clear();
+        m_pwdError->clear();
+        m_pwdOverlay->showOverlay();
+        m_userEdit->setFocus();
+        // 保持当前选中态，不跳页
+        syncMenuButtons(m_stack->currentIndex());
+        return;
+    }
+
+    // 进入页面前的准备动作
+    if (pageIndex == 1) m_entryPage->resetForm();
+    if (pageIndex == 2) m_managePage->refresh();
+    if (pageIndex == 4) m_toolsPage->onPageShown();
+    if (pageIndex == 5) m_moldPage->onPageShown();
+    if (pageIndex == 6) m_cutTaskPage->onPageShown();
+    if (pageIndex == 7) m_moldQueryPage->onPageShown();
+
+    m_stack->setCurrentIndex(pageIndex);
+    syncMenuButtons(pageIndex);
+}
+
+// 按当前页同步一级/二级按钮选中态，并决定二级栏显隐。
+void MainWindow::syncMenuButtons(int pageIndex)
+{
+    // 页 → 一级 id：0/1/2图纸 5/6线束 4工具 3设置
+    int primary = 0;
+    bool showSub = true;
+    if (pageIndex == 3)      { primary = 3; showSub = false; }
+    else if (pageIndex == 4) { primary = 2; showSub = false; }
+    else if (pageIndex == 5 || pageIndex == 6 || pageIndex == 7) primary = 1;
+
+    if (QAbstractButton *b = m_menuGroup->button(primary))
+        b->setChecked(true);
+    m_subBarStack->setVisible(showSub);
+    if (showSub) {
+        // 图纸(0/1/2) → 图纸子栏(0)；线束(5/6) → 线束子栏(1)
+        m_subBarStack->setCurrentIndex(primary == 1 ? 1 : 0);
+        if (QAbstractButton *sb = m_subGroup->button(pageIndex))
+            sb->setChecked(true);
+    }
 }
 
 void MainWindow::buildSystemTray()
@@ -503,7 +593,7 @@ void MainWindow::buildSystemTray()
 
     m_tray = new QSystemTrayIcon(this);
     m_tray->setIcon(QIcon(QStringLiteral(":/image/logo.png")));
-    m_tray->setToolTip(QStringLiteral("南都图纸管理（后台运行中）"));
+    m_tray->setToolTip(QStringLiteral("南都工作平台（后台运行中）"));
     m_tray->setContextMenu(menu);
     connect(m_tray, &QSystemTrayIcon::activated, this,
             [this](QSystemTrayIcon::ActivationReason reason) {
@@ -927,8 +1017,9 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     // 预览框尺寸变化（首次进入分类、窗口缩放、拖动分割条）时按新尺寸重缩放图片
     if (watched == m_previewLabel && event->type() == QEvent::Resize)
         updatePreviewPixmap();
-    if ((watched == m_pdfView || watched == m_pdfView->viewport()) && event->type() == QEvent::Resize)
-        QTimer::singleShot(0, this, [this] { refitPdfView(); });
+    // 不再监听 PDF viewport 的 resize 去 refit：
+    // 复杂矢量 PDF 在 FitInView 下改缩放会反复改变 viewport 尺寸（滚动条出现/消失），
+    // 触发 resize→refit→resize 无限循环，主线程假死。改为只在加载文档时 refit 一次。
     if (watched == m_pwdOverlay && event->type() == QEvent::MouseButtonRelease) {
         m_pwdOverlay->hide();
         return true;
@@ -952,8 +1043,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 DatabaseManager::instance().setCurrentOperator(QString());
                 m_entryPage->setCurrentUser(QString());
                 updateLoginLabel();
-                m_stack->setCurrentIndex(0);
-                m_menuGroup->button(0)->setChecked(true);
+                navigateToPage(0, false);
             }
         }
         return true;
@@ -1473,8 +1563,7 @@ void MainWindow::onSupplementClicked()
         return;
     }
     m_entryPage->loadProduct(m_selectedProductId);
-    m_stack->setCurrentIndex(1);
-    m_menuGroup->button(1)->setChecked(true);
+    navigateToPage(1, false);
 }
 
 void MainWindow::showProductDetail(int productId)
@@ -1652,6 +1741,8 @@ void MainWindow::updatePreviewPixmap()
 // 这里按当前尺寸强制重排一次。尺寸没变则跳过，避免反复重排。
 void MainWindow::refitPdfView()
 {
+    if (m_pdfRefitting)
+        return; // 防止 setZoomMode 触发 viewport resize 再次进入，形成死循环
     if (!m_pdfView || !m_pdfDoc || m_pdfDoc->pageCount() <= 0)
         return;
     if (m_pdfView->zoomMode() != QPdfView::ZoomMode::FitInView)
@@ -1662,8 +1753,12 @@ void MainWindow::refitPdfView()
         return;
     m_pdfFitSize = vp;
 
+    m_pdfRefitting = true;
     m_pdfView->setZoomFactor(1.0);
     m_pdfView->setZoomMode(QPdfView::ZoomMode::FitInView);
+    // 本轮 refit 引起的 resize 事件已入队，用单次 shot 在事件队列清空后解锁，
+    // 期间到达的 resize 会被 m_pdfRefitting 挡掉，不再产生新的 refit。
+    QTimer::singleShot(0, this, [this] { m_pdfRefitting = false; });
 }
 
 void MainWindow::onPreviewDoubleClicked()
@@ -1904,23 +1999,16 @@ void MainWindow::buildLoginOverlay()
         updateLoginLabel();
 
         if (m_pwdTargetPage == 1 || m_pwdTargetPage == 4) {
-            m_entryPage->resetForm();
-            m_stack->setCurrentIndex(1);
-            m_menuGroup->button(1)->setChecked(true);
             // 每日通知点「确 定」但未登录：验证通过后直接落在数量录入 Tab
+            navigateToPage(1, false);
             if (m_pwdTargetPage == 4)
                 m_entryPage->switchToQuantityEntry();
-        } else if (m_pwdTargetPage == 2) {
-            m_managePage->refresh();
-            m_stack->setCurrentIndex(2);
-            m_menuGroup->button(2)->setChecked(true);
-        } else if (m_pwdTargetPage == 3) {
-            m_stack->setCurrentIndex(3);
-            m_menuGroup->button(3)->setChecked(true);
+        } else if (m_pwdTargetPage == 2 || m_pwdTargetPage == 3 ||
+                   m_pwdTargetPage == 5 || m_pwdTargetPage == 6) {
+            navigateToPage(m_pwdTargetPage, false);
         } else {
-            // 从标题栏「登录」进入：登录成功直接回主界面，不跳服务器/客户端设置
-            m_stack->setCurrentIndex(0);
-            m_menuGroup->button(0)->setChecked(true);
+            // 从标题栏「登录」进入：登录成功直接回图纸查询页
+            navigateToPage(0, false);
         }
     };
     connect(btnOk, &QPushButton::clicked, this, verify);
@@ -1952,6 +2040,10 @@ void MainWindow::updateLoginLabel()
     // 登录 / 退出 / 初始化都走这里：把登录态推给工具页，决定芯片查询能否增删改
     if (m_toolsPage)
         m_toolsPage->setLoggedIn(m_currentUser);
+    if (m_moldPage)
+        m_moldPage->setLoggedIn(m_currentUser);
+    if (m_cutTaskPage)
+        m_cutTaskPage->setLoggedIn(m_currentUser);
     if (!m_loginLabel) return;
     if (m_currentUser.isEmpty())
         m_loginLabel->setText(QStringLiteral("未登录　点击登录"));
@@ -1989,13 +2081,12 @@ void MainWindow::openQuantityEntry()
         m_pwdError->clear();
         m_pwdOverlay->showOverlay();
         m_userEdit->setFocus();
-        m_menuGroup->button(m_stack->currentIndex())->setChecked(true);
+        syncMenuButtons(m_stack->currentIndex());
         return;
     }
 
     m_entryPage->resetForm();
-    m_stack->setCurrentIndex(1);
-    m_menuGroup->button(1)->setChecked(true);
+    navigateToPage(1, false);
     m_entryPage->switchToQuantityEntry();
 }
 
@@ -2050,6 +2141,62 @@ void MainWindow::checkDailyQtyNotify()
     showDailyQtyNotify();
 }
 
+// 右下角更新通知：确认后走「检查更新」弹窗（可下载并安装）
+void MainWindow::showUpdateNotify(const UpdateInfo &info)
+{
+    if (m_updateNotify) {
+        m_updateNotify->hide();
+        m_updateNotify->deleteLater();
+    }
+    DataEntryNotify::Options opt;
+    opt.title = QStringLiteral("更新通知");
+    opt.text = QStringLiteral("服务器有新版本 %1，是否更新？").arg(info.version);
+    opt.tip = QStringLiteral("点击「确 定」打开更新窗口，可下载并立即安装");
+    opt.showCancel = true;
+    DataEntryNotify *notify = new DataEntryNotify(opt, nullptr);
+    m_updateNotify = notify;
+    connect(notify, &DataEntryNotify::accepted, this, [this] {
+        UpdateDialog::checkForUpdate(this);
+    });
+    notify->showAtBottomRight();
+}
+
+void MainWindow::checkUpdateNotify()
+{
+    const QDateTime now = QDateTime::currentDateTime();
+    const QDateTime prev = m_lastUpdateCheck;
+    m_lastUpdateCheck = now;
+
+    QSettings s;
+    if (!s.value(AutoStart::updateEnabledKey(), true).toBool())
+        return;
+    if (!prev.isValid())
+        return;
+
+    const QTime target = AutoStart::configuredUpdateTime();
+    QDateTime due = now;
+    due.setTime(target);
+    // 与录入提醒同一策略：只在刚跨过设定时刻时检查，启动晚于该时刻不补弹
+    if (!(prev < due && now >= due))
+        return;
+
+    const QString stamp = now.date().toString(Qt::ISODate) + QStringLiteral(" ")
+                        + target.toString(QStringLiteral("HH:mm"));
+    if (s.value(AutoStart::updateStampKey()).toString() == stamp)
+        return;
+    s.setValue(AutoStart::updateStampKey(), stamp);
+    s.sync();
+
+    // 服务器/客户端都走同一查询接口；查询失败（离线）静默跳过，不打扰用户
+    QString err;
+    const UpdateInfo info = UpdateManager::instance().checkUpdate(&err, PackageKind::Pc);
+    if (!err.isEmpty() || !info.available)
+        return;
+    if (!UpdateManager::instance().hasUpdate(info))
+        return;
+    showUpdateNotify(info);
+}
+
 void MainWindow::changeEvent(QEvent *event)
 {
     QWidget::changeEvent(event);
@@ -2075,22 +2222,37 @@ QWidget { background:#2B3046; color:#ffffff; font-size:14px; }
 #appTitle { color:white; font-size:25px; }
 #menuBtn { color:white; font-size:17px; border-radius:0px; background:transparent; border:none; }
 #menuBtn:checked { color:#1a67c0; background:#273d64; border-bottom:1px solid #1673db; }
+/* 二级菜单栏：图纸/线束的业务子页，btn 复用 #catTab 原生风格 */
+/* 二级菜单栏：背景使用标题菜单栏的深色 #22293C，下方统一分隔线 */
+#subBarStack { background:#22293C;
+               border-top:1px solid rgba(255,255,255,0.08);
+               border-bottom:1px solid rgba(255,255,255,0.12); }
+#subWireBar, #subDrawingBar { background:#22293C; }
 #btnMin,#btnMax,#btnClose { background:transparent; border:none; color:#cfd3e0; border-radius:4px; }
 #btnMin:hover,#btnMax:hover { background:rgba(255,255,255,0.12); }
 #btnClose:hover { background:#E8463A; color:#fff; }
 #catBar { background:#2B3046; border-top:1px solid rgba(255,255,255,0.08); }
-/* 分类标签：与顶部菜单同款风格 */
-#catTab { background:transparent; border:none; color:#ffffff; font-size:16px;
+/* 二级菜单：淡蓝底 + 底部蓝线（一级菜单保持蓝色选中不变） */
+#catTab { background:transparent; border:none; color:rgba(255,255,255,.62); font-size:16px;
           padding:10px 22px; border-radius:0px; }
-#catTab:hover:!checked { color:#43CF7C; }
-#catTab:checked { color:#43CF7C; background:#1E3B2C; border-bottom:2px solid #43CF7C; }
+#catTab:hover:!checked { color:#7FB6F5; }
+#catTab:checked { color:#DCEAFF; background:rgba(45,127,224,.16); border-bottom:2px solid #3B8CE8; }
 
-/* 设置页 Tab：与分类标签同款风格 */
+/* 三级菜单：淡蓝底 + 底部蓝线 */
 QTabWidget::pane { border:none; background:transparent; }
-QTabBar::tab { background:transparent; color:#ffffff; font-size:16px;
+QTabBar::tab { background:transparent; color:rgba(255,255,255,.60); font-size:16px;
                padding:10px 26px; border:none; }
-QTabBar::tab:hover:!selected { color:#43CF7C; }
-QTabBar::tab:selected { color:#43CF7C; background:#1E3B2C; border-bottom:2px solid #43CF7C; }
+QTabBar::tab:hover:!selected { color:#7FB6F5; }
+QTabBar::tab:selected { color:#DCEAFF; background:rgba(45,127,224,.12);
+                        border-bottom:2px solid #3B8CE8; }
+/* 工具页/设置页的二级菜单：整条深色背景 + 与内容区之间的横线 */
+#darkMenuTabs { background:#22293C; border:none; }
+#darkMenuTabs QTabBar { background:#22293C; border:none; }
+#darkMenuTabs QTabBar::tab { background:#22293C; color:#AFC0D8; }
+#darkMenuTabs QTabBar::tab:selected { color:#DCEAFF; background:rgba(45,127,224,.16);
+                                       border-bottom:2px solid #3B8CE8; }
+#darkMenuTabs::pane { border:none; border-top:1px solid rgba(255,255,255,.12); background:transparent; }
+#darkMenuTabs QStackedWidget { background:#2B3046; }
 /* 主界面顶部细线已由共用 #titleLine 提供，这里不再重复描边 */
 #toolBar { background:#2B3046; }
 QLineEdit { background:#22293C; border:1px solid #4A5468;
@@ -2109,6 +2271,8 @@ QPushButton#btnEntry:disabled { background:rgba(67,207,124,0.3); color:rgba(11,3
             border-radius:8px; padding:7px 18px; font-weight:bold; }
 #btnDanger:hover { background:#C9606A; }
 #btnDanger:pressed { background:#B05560; }
+/* 与 btnEntry:disabled 对齐：选中规则被清空时，禁用/删除按钮也要明显变灰 */
+#btnDanger:disabled { background:rgba(224,108,117,0.28); color:rgba(255,255,255,0.45); }
 #pwdError { background:transparent; color:#E06C75; font-size:12px; }
 /* 检查更新卡片中的状态/提示文字（与登录卡的深色卡片配套） */
 #updateStatus { background:transparent; color:rgba(255,255,255,0.78); font-size:13px; }

@@ -229,25 +229,25 @@ struct SstCursor
     int si = 0;
     int p = 8; // SST 记录头：cstTotal(4) + cstUnique(4)
 
-    bool jump(bool skipFlagByte)
-    {
-        ++si;
-        p = skipFlagByte ? 1 : 0;
-        return si < segs->size() && p <= segs->at(si).size();
-    }
-
-    bool ensure()
+    // BIFF8 规定：字符串跨 CONTINUE 记录时，新段首字节是这一段的压缩标志，
+    // 读取任何数据（含 3 字节字符串头、富文本 run、扩展数据）跨段都必须跳过它。
+    bool ensure(bool *wide = nullptr)
     {
         while (si < segs->size() && p >= segs->at(si).size()) {
-            if (!jump(false))
+            ++si;
+            if (si >= segs->size())
                 return false;
+            p = segs->at(si).isEmpty() ? 0 : 1;
+            if (wide && p == 1)
+                *wide = (quint8(segs->at(si).constData()[0]) & 1u) != 0;
         }
-        return si < segs->size();
+        return si < segs->size() && p <= segs->at(si).size();
     }
 
     QByteArray readPlain(int n)
     {
         QByteArray out;
+        out.reserve(n);
         while (n > 0) {
             if (!ensure())
                 break;
@@ -262,26 +262,19 @@ struct SstCursor
         return out;
     }
 
-    // 字符数据跨 CONTINUE 时，新段首字节是新一截字符的压缩标志
     QString readChars(int cch, bool wide)
     {
         QString out;
         out.reserve(cch);
         int left = cch;
         while (left > 0) {
-            if (!ensure())
+            if (!ensure(&wide))
                 break;
             const QByteArray &s = segs->at(si);
             const int unit = wide ? 2 : 1;
             const int avail = (s.size() - p) / unit;
-            if (avail <= 0) {
-                if (si + 1 >= segs->size() || segs->at(si + 1).isEmpty())
-                    break;
-                wide = (quint8(segs->at(si + 1).constData()[0]) & 1u) != 0;
-                if (!jump(true))
-                    break;
+            if (avail <= 0)
                 continue;
-            }
             const int take = qMin(left, avail);
             if (wide)
                 out += QString::fromUtf16(
@@ -290,11 +283,6 @@ struct SstCursor
                 out += QString::fromLocal8Bit(s.constData() + p, take);
             p += take * unit;
             left -= take;
-            if (left > 0 && si + 1 < segs->size() && !segs->at(si + 1).isEmpty()) {
-                wide = (quint8(segs->at(si + 1).constData()[0]) & 1u) != 0;
-                if (!jump(true))
-                    break;
-            }
         }
         return out;
     }
@@ -388,9 +376,21 @@ bool read(const QString &path, QList<QStringList> &rows, QString *err)
     }
 
     QMap<int, QMap<int, QString>> cells;
+    // 工作簿里可能有隐藏/模板 sheet；只读第一张工作表，避免后面的 sheet 覆盖前面的单元格。
+    bool inFirstSheet = false;
     for (const Rec &r : recs) {
         const char *d = r.data.constData();
         const int n = r.data.size();
+        if (r.id == 0x0809 && n >= 4 && rd16(d, 2) == 0x0010) { // BOF: worksheet
+            if (inFirstSheet)
+                break;
+            inFirstSheet = true;
+            continue;
+        }
+        if (!inFirstSheet)
+            continue;
+        if (r.id == 0x000A) // EOF：第一张工作表结束
+            break;
         switch (r.id) {
         case 0x00FD: // LABELSST
             if (n >= 10) {

@@ -6,8 +6,10 @@ E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/_build_che
   D:/Qt/6.8.3/mingw_64/include/QtCore/QList \
   D:/Qt/6.8.3/mingw_64/include/QtCore/QMap \
   D:/Qt/6.8.3/mingw_64/include/QtCore/QObject \
+  D:/Qt/6.8.3/mingw_64/include/QtCore/QRegularExpression \
   D:/Qt/6.8.3/mingw_64/include/QtCore/QString \
   D:/Qt/6.8.3/mingw_64/include/QtCore/QStringList \
+  D:/Qt/6.8.3/mingw_64/include/QtCore/QtGlobal \
   D:/Qt/6.8.3/mingw_64/include/QtCore/q20functional.h \
   D:/Qt/6.8.3/mingw_64/include/QtCore/q20memory.h \
   D:/Qt/6.8.3/mingw_64/include/QtCore/q20type_traits.h \
@@ -345,4 +347,6 @@ E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/_build_che
   D:/Qt/Tools/mingw1310_64/x86_64-w64-mingw32/include/wchar.h \
   E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/model/product.h \
   E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/chiptypes.h \
+  E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/cuttypes.h \
+  E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/moldtypes.h \
   E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/stocktypes.h

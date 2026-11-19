@@ -19,6 +19,20 @@ inline QString notifyTimeKey()     { return QStringLiteral("notify/dailyQtyTime"
 inline QString notifyStampKey() { return QStringLiteral("notify/dailyQtyLastStamp"); }
 inline QString defaultNotifyTime() { return QStringLiteral("16:00"); }
 
+// 每日更新通知：到点检查服务器是否有新版本，有则右下角提示是否更新
+inline QString updateEnabledKey() { return QStringLiteral("notify/updateEnabled"); }
+inline QString updateTimeKey()    { return QStringLiteral("notify/updateTime"); }
+inline QString updateStampKey()   { return QStringLiteral("notify/updateLastStamp"); }
+inline QString defaultUpdateTime() { return QStringLiteral("09:00"); }
+
+inline QTime configuredUpdateTime()
+{
+    const QTime t = QTime::fromString(
+        QSettings().value(updateTimeKey(), defaultUpdateTime()).toString(),
+        QStringLiteral("HH:mm"));
+    return t.isValid() ? t : QTime(9, 0);
+}
+
 inline QTime configuredNotifyTime()
 {
     const QTime t = QTime::fromString(

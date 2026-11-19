@@ -2,6 +2,7 @@
 #include "server/remoteapiclient.h"
 #include <QSqlQuery>
 #include <QSqlError>
+#include <QThread>
 #include <QVariant>
 #include <QDir>
 #include <QFile>
@@ -17,7 +18,11 @@
 #include <QDateTime>
 #include <QHash>
 #include <QRegularExpression>
+#include <QSet>
+#include <QMap>
 #include "util/xlsreader.h"
+#include "util/moldtypes.h"
+#include "util/cuttypes.h"
 
 // 操作日志明细：一行「字段 / 修改前 / 修改后」，打包成 JSON 供设置页弹窗渲染表格
 static QJsonObject opRow(const QString &field, const QString &before, const QString &after)
@@ -457,6 +462,186 @@ void DatabaseManager::createTables()
         "CREATE INDEX IF NOT EXISTS idx_chip_hardware ON chip_item(hardware)"));
     q.exec(QStringLiteral(
         "CREATE INDEX IF NOT EXISTS idx_chip_model ON chip_item(model)"));
+    // 端子机模具台账：模具号可空（老模具/刀片无编号），status 标记待完善。
+    // terminals 存适用端子（多个用「、」连接），便于老模具无编号时按端子反查。
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS mold_item("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " mold_code TEXT,"
+        " machine_type TEXT,"
+        " terminals TEXT,"
+        " press_wire TEXT,"
+        " terminal_info TEXT,"
+        " seal_info TEXT,"
+        " machine_no TEXT,"
+        " seal_image TEXT,"
+        " terminal_image TEXT,"
+        " harness TEXT,"
+        " orientation TEXT,"
+        " department TEXT,"
+        " area TEXT,"
+        " keeper TEXT,"
+        " vendor TEXT,"
+        " remark TEXT,"
+        " status INTEGER NOT NULL DEFAULT 0,"
+        " creator TEXT, created_at TEXT, updated_at TEXT)"));
+    q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_mold_code ON mold_item(mold_code)"));
+    ensureMoldColumns();
+    // 线束下线：线束 → 明细 → 任务 → 机器，派工规则可配置。
+    // 物理表已从 cut_batch 改名为 cut_harness；name 列存放表格型号，batch_no 存放表格批次号。
+    // HTTP/AutoIt 仍使用 batchName/batchNo 字段名，避免跨端协议变动。
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS cut_harness("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " name TEXT, batch_no TEXT, file_name TEXT, quantity TEXT, total_rows INTEGER DEFAULT 0,"
+        " creator TEXT, created_at TEXT)"));
+    {
+        // 旧库把 cut_batch 改名为 cut_harness，只迁移一次。
+        // 坑：查询结果集不关闭时（oldTable 仍 active）SQLite 会锁住 cut_batch，
+        // 导致后面的 DROP TABLE 静默失败；旧表留在库里，每次启动又把已删除的线束
+        // 回填进 cut_harness，表现为「删除后重开软件线束又回来了」。
+        QSqlQuery probe(m_db);
+        bool hasOldTable = probe.exec(QStringLiteral(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='cut_batch'"))
+            && probe.next();
+        probe.finish();               // 必须先关游标释放读锁，否则 DROP 会被锁住
+        if (hasOldTable) {
+            QSqlQuery mark(m_db);
+            const bool migrated = mark.exec(QStringLiteral(
+                    "SELECT value FROM app_meta WHERE key='cut_harness_migrated'"))
+                && mark.next() && mark.value(0).toString() == QLatin1String("1");
+            mark.finish();
+            if (!migrated) {
+                // 旧库可能缺少 batch_no 列；列已存在时 ALTER 会失败，忽略即可
+                QSqlQuery alter(m_db);
+                alter.exec(QStringLiteral("ALTER TABLE cut_batch ADD COLUMN batch_no TEXT"));
+                alter.finish();
+                QSqlQuery copy(m_db);
+                copy.exec(QStringLiteral(
+                    "INSERT INTO cut_harness(id,name,batch_no,file_name,quantity,total_rows,creator,created_at) "
+                    "SELECT id,name,batch_no,file_name,quantity,total_rows,creator,created_at FROM cut_batch "
+                    "WHERE NOT EXISTS (SELECT 1 FROM cut_harness WHERE cut_harness.id=cut_batch.id)"));
+                copy.finish();
+                QSqlQuery flag(m_db);
+                flag.exec(QStringLiteral(
+                    "INSERT OR REPLACE INTO app_meta(key,value) VALUES('cut_harness_migrated','1')"));
+                flag.finish();
+            }
+            // 旧表必须清掉；失败时记日志并重试，绝不能留着反复回填
+            QSqlQuery dropQ(m_db);
+            for (int attempt = 0; attempt < 3; ++attempt) {
+                if (dropQ.exec(QStringLiteral("DROP TABLE IF EXISTS cut_batch")))
+                    break;
+                qWarning() << "DROP TABLE cut_batch failed:" << dropQ.lastError().text();
+                dropQ.finish();
+                QThread::msleep(50);
+            }
+            dropQ.finish();
+            QSqlQuery seqOld(m_db);
+            seqOld.exec(QStringLiteral("DELETE FROM sqlite_sequence WHERE name='cut_batch'"));
+            seqOld.finish();
+        }
+    }
+    // 空库时同步清掉自增计数，避免外部删行后新线束仍从旧 ID 继续
+    {
+        QSqlQuery seq(m_db);
+        if (seq.exec(QStringLiteral("SELECT COUNT(*) FROM cut_harness")) && seq.next()
+            && seq.value(0).toInt() == 0)
+            seq.exec(QStringLiteral("DELETE FROM sqlite_sequence WHERE name='cut_harness'"));
+    }
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS cut_item("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " batch_id INTEGER NOT NULL, seq INTEGER, circuit TEXT,"
+        " material TEXT, section TEXT, color TEXT, wire_length TEXT,"
+        " strip_left TEXT, strip_right TEXT, terminal_left TEXT, terminal_right TEXT,"
+        " work_left TEXT, work_right TEXT,"
+        " created_at TEXT)"));
+    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_cut_item_batch ON cut_item(batch_id)"));
+    // machine_no（下线表原表里的机台号）已彻底废弃：派工只看规则 + 线径能力 + 均衡。
+    // 老库升级时把这列删掉，避免历史数据误导。
+    {
+        QSqlQuery ti(m_db);
+        bool hasMachineNo = false;
+        if (ti.exec(QStringLiteral("PRAGMA table_info(cut_item)")))
+            while (ti.next())
+                if (ti.value(1).toString() == QLatin1String("machine_no")) { hasMachineNo = true; break; }
+        ti.finish();
+        if (hasMachineNo) {
+            QSqlQuery dropCol(m_db);
+            if (!dropCol.exec(QStringLiteral("ALTER TABLE cut_item DROP COLUMN machine_no")))
+                qWarning() << "drop cut_item.machine_no failed:" << dropCol.lastError().text();
+        }
+    }
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS cut_task("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " batch_id INTEGER NOT NULL, item_id INTEGER NOT NULL, machine_id INTEGER NOT NULL,"
+        " quantity INTEGER DEFAULT 1, done_qty INTEGER DEFAULT 0, status INTEGER DEFAULT 0,"
+        " operator TEXT, created_at TEXT, finished_at TEXT)"));
+    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_cut_task_machine ON cut_task(machine_id,status)"));
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS cut_machine("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " code TEXT UNIQUE, name TEXT, capabilities TEXT, active INTEGER DEFAULT 1)"));
+    // 首次启动播种 5 台机器（名称：一号机~五号机）
+    if (!q.exec(QStringLiteral("SELECT COUNT(*) FROM cut_machine)"))
+        || !q.next() || q.value(0).toInt() == 0) {
+        const QStringList names = { QStringLiteral("一号机"), QStringLiteral("二号机"),
+            QStringLiteral("三号机"), QStringLiteral("四号机"), QStringLiteral("五号机") };
+        for (int i = 0; i < names.size(); ++i) {
+            QSqlQuery ins(m_db);
+            ins.prepare(QStringLiteral("INSERT INTO cut_machine(code,name,capabilities,active) VALUES(?,?,?,1)"));
+            ins.addBindValue(QStringLiteral("M%1").arg(i + 1));
+            ins.addBindValue(names.at(i));
+            ins.addBindValue(QStringLiteral("{}"));
+            ins.exec();
+        }
+    }
+    // 「其他」= 手动/人工下线，不参与智能分配，只供人工派工时选择（老库也能补上）
+    {
+        QSqlQuery chk(m_db);
+        if (chk.exec(QStringLiteral("SELECT id FROM cut_machine WHERE code='OTHER'")) && !chk.next()) {
+            QSqlQuery ins(m_db);
+            ins.exec(QStringLiteral(
+                "INSERT INTO cut_machine(code,name,capabilities,active) VALUES('OTHER','其他','{}',1)"));
+        }
+    }
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS cut_rule("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " field TEXT, match_type TEXT, match_value TEXT,"
+        " target_machine TEXT, enabled INTEGER DEFAULT 1)"));
+    // 下线机设备端：设备授权、当前任务、打印日志
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS cut_device("
+        " machine_id INTEGER PRIMARY KEY,"
+        " machine_name TEXT, device_key TEXT, active INTEGER DEFAULT 1)"));
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS cut_device_state("
+        " machine_id INTEGER PRIMARY KEY,"
+        " current_task_id INTEGER DEFAULT 0,"
+        " last_start_at TEXT, last_confirm_at TEXT, updated_at TEXT)"));
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS cut_print_log("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " task_id INTEGER, machine_id INTEGER, operator TEXT,"
+        " label_no TEXT, copies INTEGER, result TEXT, created_at TEXT)"));
+    {
+        const QStringList names = { QStringLiteral("一号机"), QStringLiteral("二号机"),
+            QStringLiteral("三号机"), QStringLiteral("四号机"), QStringLiteral("五号机") };
+        for (int i = 0; i < names.size(); ++i) {
+            QSqlQuery ins(m_db);
+            ins.prepare(QStringLiteral(
+                "INSERT OR IGNORE INTO cut_device(machine_id,machine_name,device_key,active)"
+                " VALUES(?,?,?,1)"));
+            ins.addBindValue(i + 1);
+            ins.addBindValue(names.at(i));
+            ins.addBindValue(QStringLiteral("ND-M%1").arg(i + 1));
+            ins.exec();
+        }
+    }
     ensureProductColumns();
 }
 
@@ -808,6 +993,34 @@ void DatabaseManager::ensureProductColumns()
             continue;
         QSqlQuery a(m_db);
         a.exec(QStringLiteral("ALTER TABLE product ADD COLUMN %1 %2").arg(c.first, c.second));
+    }
+}
+
+// 旧版 mold_item 表字段较少，CREATE TABLE IF NOT EXISTS 不会改动已存在的表；
+// 这里按 PRAGMA 补齐新增列，保证升级后不丢数据。
+void DatabaseManager::ensureMoldColumns()
+{
+    QSqlQuery q(m_db);
+    q.exec(QStringLiteral("PRAGMA table_info(mold_item)"));
+    QStringList have;
+    while (q.next())
+        have << q.value(1).toString();
+    const QList<QPair<QString, QString>> cols = {
+        {QStringLiteral("machine_type"), QStringLiteral("TEXT")},
+        {QStringLiteral("terminal_info"), QStringLiteral("TEXT")},
+        {QStringLiteral("machine_no"), QStringLiteral("TEXT")},
+        {QStringLiteral("seal_image"), QStringLiteral("TEXT")},
+        {QStringLiteral("terminal_image"), QStringLiteral("TEXT")},
+        {QStringLiteral("orientation"), QStringLiteral("TEXT")},
+        {QStringLiteral("department"), QStringLiteral("TEXT")},
+        {QStringLiteral("area"), QStringLiteral("TEXT")},
+        {QStringLiteral("keeper"), QStringLiteral("TEXT")},
+        {QStringLiteral("vendor"), QStringLiteral("TEXT")}};
+    for (const auto &c : cols) {
+        if (have.contains(c.first))
+            continue;
+        QSqlQuery a(m_db);
+        a.exec(QStringLiteral("ALTER TABLE mold_item ADD COLUMN %1 %2").arg(c.first, c.second));
     }
 }
 
@@ -1219,6 +1432,1151 @@ bool DatabaseManager::chipDelete(int id, QString *err)
     }
     addOpLog(QStringLiteral("删除芯片"), oldModel, oldHardware,
              QStringLiteral("id=%1").arg(id));
+    return true;
+}
+
+// ==================== 端子机模具台账 ====================
+namespace {
+MoldItem moldFromQuery(const QSqlQuery &q)
+{
+    // 列顺序：id,mold_code,type,machine_type,terminals,press_wire,terminal_info,
+    // seal_info,seal_image,terminal_image,harness,orientation,department,area,
+    // keeper,vendor,remark,status,creator,created_at,updated_at
+    MoldItem m;
+    m.id = q.value(0).toInt();
+    m.moldCode = q.value(1).toString();
+    m.type = q.value(2).toString();
+    m.machineType = q.value(3).toString();
+    m.terminals = q.value(4).toString();
+    m.pressWire = q.value(5).toString();
+    m.terminalInfo = q.value(6).toString();
+    m.sealInfo = q.value(7).toString();
+    m.machineNo = q.value(8).toString();
+    m.sealImage = q.value(9).toString();
+    m.terminalImage = q.value(10).toString();
+    m.harness = q.value(11).toString();
+    m.orientation = q.value(12).toString();
+    m.department = q.value(13).toString();
+    m.area = q.value(14).toString();
+    m.keeper = q.value(15).toString();
+    m.vendor = q.value(16).toString();
+    m.remark = q.value(17).toString();
+    m.status = q.value(18).toInt();
+    m.creator = q.value(19).toString();
+    m.createdAt = q.value(20).toString();
+    m.updatedAt = q.value(21).toString();
+    return m;
+}
+const QString kMoldColumns = QStringLiteral(
+    "id,mold_code,type,machine_type,terminals,press_wire,terminal_info,seal_info,"
+    "machine_no,seal_image,terminal_image,harness,orientation,department,area,keeper,"
+    "vendor,remark,status,creator,created_at,updated_at");
+} // namespace
+
+QList<MoldItem> DatabaseManager::moldSearch(const QString &keyword, const QString &status,
+                                            int limit, int *total, QString *err) const
+{
+    if (total) *total = 0;
+    if (err) err->clear();
+    if (!isServer())
+        return RemoteApiClient::instance().moldSearch(keyword, status, limit, total, err);
+
+    QList<MoldItem> out;
+    const QString kw = keyword.trimmed();
+    QStringList cond;
+    QVariantList binds;
+    if (!kw.isEmpty()) {
+        cond << QStringLiteral("(instr(upper(coalesce(mold_code,'')),upper(?))>0"
+                               " OR instr(upper(coalesce(terminals,'')),upper(?))>0"
+                               " OR instr(upper(coalesce(harness,'')),upper(?))>0"
+                               " OR instr(upper(coalesce(press_wire,'')),upper(?))>0"
+                               " OR instr(upper(coalesce(terminal_info,'')),upper(?))>0"
+                               " OR instr(upper(coalesce(keeper,'')),upper(?))>0)");
+        binds << kw << kw << kw << kw << kw << kw;
+    }
+    if (status == QLatin1String("incomplete"))
+        cond << QStringLiteral("status=0");
+    else if (status == QLatin1String("complete"))
+        cond << QStringLiteral("status=1");
+    else if (status == QLatin1String("checked"))
+        cond << QStringLiteral("status=2");
+    const QString where = cond.isEmpty() ? QString() : QStringLiteral(" WHERE ") + cond.join(QStringLiteral(" AND "));
+
+    QSqlQuery cnt(m_db);
+    cnt.prepare(QStringLiteral("SELECT COUNT(*) FROM mold_item") + where);
+    for (const QVariant &v : binds) cnt.addBindValue(v);
+    if (cnt.exec() && cnt.next() && total) *total = cnt.value(0).toInt();
+
+    QString sql = QStringLiteral("SELECT ") + kMoldColumns
+        + QStringLiteral(" FROM mold_item") + where
+        + QStringLiteral(" ORDER BY status, mold_code, id");
+    if (limit > 0) sql += QStringLiteral(" LIMIT %1").arg(limit);
+    QSqlQuery q(m_db);
+    q.prepare(sql);
+    for (const QVariant &v : binds) q.addBindValue(v);
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        return out;
+    }
+    while (q.next()) out.append(moldFromQuery(q));
+    return out;
+}
+
+bool DatabaseManager::moldSave(MoldItem *item, QString *err)
+{
+    if (err) err->clear();
+    if (!item) return false;
+    if (!isServer()) return RemoteApiClient::instance().moldSave(item, err);
+    const bool isNew = (item->id <= 0);
+    const QString now = QDateTime::currentDateTime().toString(Qt::ISODate);
+    QSqlQuery q(m_db);
+    bool ok = false;
+    if (!isNew) {
+        q.prepare(QStringLiteral(
+            "UPDATE mold_item SET mold_code=?,type=?,machine_type=?,terminals=?,press_wire=?,"
+            "terminal_info=?,seal_info=?,machine_no=?,seal_image=?,terminal_image=?,harness=?,"
+            "orientation=?,department=?,area=?,keeper=?,vendor=?,remark=?,status=?,updated_at=? "
+            "WHERE id=?"));
+    } else {
+        q.prepare(QStringLiteral(
+            "INSERT INTO mold_item(mold_code,type,machine_type,terminals,press_wire,terminal_info,"
+            "seal_info,machine_no,seal_image,terminal_image,harness,orientation,department,area,"
+            "keeper,vendor,remark,status,creator,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
+    }
+    q.addBindValue(item->moldCode);
+    q.addBindValue(item->type);
+    q.addBindValue(item->machineType);
+    q.addBindValue(item->terminals);
+    q.addBindValue(item->pressWire);
+    q.addBindValue(item->terminalInfo);
+    q.addBindValue(item->sealInfo);
+    q.addBindValue(item->machineNo);
+    q.addBindValue(item->sealImage);
+    q.addBindValue(item->terminalImage);
+    q.addBindValue(item->harness);
+    q.addBindValue(item->orientation);
+    q.addBindValue(item->department);
+    q.addBindValue(item->area);
+    q.addBindValue(item->keeper);
+    q.addBindValue(item->vendor);
+    q.addBindValue(item->remark);
+    q.addBindValue(item->status);
+    if (isNew) {
+        q.addBindValue(currentOperator());
+        q.addBindValue(now);
+        q.addBindValue(now);
+    } else {
+        q.addBindValue(now);
+        q.addBindValue(item->id);
+    }
+    ok = q.exec();
+    if (ok && isNew) item->id = q.lastInsertId().toInt();
+    if (!ok) {
+        if (err) *err = q.lastError().text();
+        return false;
+    }
+    addOpLog(isNew ? QStringLiteral("新增模具") : QStringLiteral("修改模具"),
+             item->moldCode.isEmpty() ? item->terminals : item->moldCode,
+             item->machineType, item->terminals);
+    return true;
+}
+
+bool DatabaseManager::moldDelete(int id, QString *err)
+{
+    if (err) err->clear();
+    if (id <= 0) return false;
+    if (!isServer()) return RemoteApiClient::instance().moldDelete(id, err);
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("DELETE FROM mold_item WHERE id=?"));
+    q.addBindValue(id);
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        return false;
+    }
+    addOpLog(QStringLiteral("删除模具"), QString(), QString(), QStringLiteral("id=%1").arg(id));
+    return true;
+}
+
+// ==================== 线束下线 ====================
+namespace {
+CutItem cutItemFromQuery(const QSqlQuery &q)
+{
+    CutItem it;
+    it.id = q.value(0).toInt();
+    it.batchId = q.value(1).toInt();
+    it.seq = q.value(2).toInt();
+    it.circuit = q.value(3).toString();
+    it.material = q.value(4).toString();
+    it.section = q.value(5).toString();
+    it.color = q.value(6).toString();
+    it.wireLength = q.value(7).toString();
+    it.stripLeft = q.value(8).toString();
+    it.stripRight = q.value(9).toString();
+    it.terminalLeft = q.value(10).toString();
+    it.terminalRight = q.value(11).toString();
+    it.workLeft = q.value(12).toString();
+    it.workRight = q.value(13).toString();
+    return it;
+}
+CutTask cutTaskFromQuery(const QSqlQuery &q)
+{
+    CutTask t;
+    t.id = q.value(0).toInt();
+    t.batchId = q.value(1).toInt();
+    t.itemId = q.value(2).toInt();
+    t.machineId = q.value(3).toInt();
+    t.quantity = q.value(4).toInt();
+    t.doneQty = q.value(5).toInt();
+    t.status = q.value(6).toInt();
+    t.operName = q.value(7).toString();
+    t.createdAt = q.value(8).toString();
+    t.finishedAt = q.value(9).toString();
+    t.seq = q.value(10).toInt();
+    t.circuit = q.value(11).toString();
+    t.color = q.value(12).toString();
+    t.wireLength = q.value(13).toString();
+    t.section = q.value(14).toString();
+    t.workLeft = q.value(15).toString();
+    t.workRight = q.value(16).toString();
+    t.batchCreatedAt = q.value(17).toString();
+    t.material = q.value(18).toString();
+    t.stripLeft = q.value(19).toString();
+    t.stripRight = q.value(20).toString();
+    t.terminalLeft = q.value(21).toString();
+    t.terminalRight = q.value(22).toString();
+    t.batchName = q.value(23).toString();
+    t.batchNo = q.value(24).toString();
+    return t;
+}
+} // namespace
+
+QList<CutBatch> DatabaseManager::cutBatches(QString *err) const
+{
+    if (err) err->clear();
+    if (!isServer()) return RemoteApiClient::instance().cutBatches(err);
+    QList<CutBatch> out;
+    QSqlQuery q(m_db);
+    if (!q.exec(QStringLiteral("SELECT id,name,file_name,quantity,total_rows,creator,created_at,batch_no "
+                               "FROM cut_harness ORDER BY id DESC"))) {
+        if (err) *err = q.lastError().text();
+        return out;
+    }
+    while (q.next()) {
+        CutBatch b;
+        b.id = q.value(0).toInt();
+        b.name = q.value(1).toString();
+        b.fileName = q.value(2).toString();
+        b.quantity = q.value(3).toString();
+        b.totalRows = q.value(4).toInt();
+        b.creator = q.value(5).toString();
+        b.createdAt = q.value(6).toString();
+        b.batchNo = q.value(7).toString();
+        out.append(b);
+    }
+    return out;
+}
+
+QList<CutItem> DatabaseManager::cutItems(int batchId, QString *err) const
+{
+    if (err) err->clear();
+    if (!isServer()) return RemoteApiClient::instance().cutItems(batchId, err);
+    QList<CutItem> out;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT id,batch_id,seq,circuit,material,section,color,wire_length,"
+                             "strip_left,strip_right,terminal_left,terminal_right,work_left,work_right "
+                             "FROM cut_item WHERE batch_id=? ORDER BY seq,id"));
+    q.addBindValue(batchId);
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        return out;
+    }
+    while (q.next()) out.append(cutItemFromQuery(q));
+    return out;
+}
+
+int DatabaseManager::cutImportBatch(const CutBatch &batch, const QList<CutItem> &items, QString *err)
+{
+    if (err) err->clear();
+    if (!isServer()) {
+        int id = RemoteApiClient::instance().cutImportBatch(batch, items, err);
+        return id;
+    }
+    const QString now = QDateTime::currentDateTime().toString(Qt::ISODate);
+    m_db.transaction();
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("INSERT INTO cut_harness(name,batch_no,file_name,quantity,total_rows,creator,created_at) "
+                             "VALUES(?,?,?,?,?,?,?)"));
+    q.addBindValue(batch.name);
+    q.addBindValue(batch.batchNo.isEmpty() ? batch.name : batch.batchNo);
+    q.addBindValue(batch.fileName);
+    q.addBindValue(batch.quantity);
+    q.addBindValue(items.size());
+    q.addBindValue(batch.creator.isEmpty() ? currentOperator() : batch.creator);
+    q.addBindValue(now);
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        m_db.rollback();
+        return -1;
+    }
+    const int batchId = q.lastInsertId().toInt();
+    QSqlQuery ins(m_db);
+    ins.prepare(QStringLiteral("INSERT INTO cut_item(batch_id,seq,circuit,material,section,color,wire_length,"
+                               "strip_left,strip_right,terminal_left,terminal_right,work_left,work_right,"
+                               "created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
+    for (const CutItem &it : items) {
+        ins.addBindValue(batchId);
+        ins.addBindValue(it.seq);
+        ins.addBindValue(it.circuit);
+        ins.addBindValue(it.material);
+        ins.addBindValue(it.section);
+        ins.addBindValue(it.color);
+        ins.addBindValue(it.wireLength);
+        ins.addBindValue(it.stripLeft);
+        ins.addBindValue(it.stripRight);
+        ins.addBindValue(it.terminalLeft);
+        ins.addBindValue(it.terminalRight);
+        ins.addBindValue(it.workLeft);
+        ins.addBindValue(it.workRight);
+        ins.addBindValue(now);
+        if (!ins.exec()) {
+            if (err) *err = ins.lastError().text();
+            m_db.rollback();
+            return -1;
+        }
+    }
+    m_db.commit();
+    addOpLog(QStringLiteral("导入下线表"), batch.name, batch.fileName,
+             QStringLiteral("%1 条明细").arg(items.size()));
+    return batchId;
+}
+
+bool DatabaseManager::cutDeleteBatch(int batchId, QString *err)
+{
+    if (err) err->clear();
+    // ID 非法时直接失败：否则三条 DELETE 都是 0 行，却会被当成「删除成功」
+    if (batchId <= 0) {
+        if (err) *err = QStringLiteral("线束 ID 无效，请刷新列表后重新选择要删除的线束。");
+        return false;
+    }
+    if (!isServer()) return RemoteApiClient::instance().cutDeleteBatch(batchId, err);
+    m_db.transaction();
+    QSqlQuery q(m_db);
+    bool ok = true;
+    q.prepare(QStringLiteral("DELETE FROM cut_task WHERE batch_id=?")); q.addBindValue(batchId);
+    ok &= q.exec();
+    q.prepare(QStringLiteral("DELETE FROM cut_item WHERE batch_id=?")); q.addBindValue(batchId);
+    ok &= q.exec();
+    q.prepare(QStringLiteral("DELETE FROM cut_harness WHERE id=?")); q.addBindValue(batchId);
+    ok &= q.exec();
+    const int harnessDeleted = ok ? q.numRowsAffected() : 0;
+    if (!ok) {
+        if (err) *err = q.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+    // 线束主记录必须真的被删掉，否则不能报成功（防止「删除完成」但记录还在）
+    if (harnessDeleted <= 0) {
+        m_db.rollback();
+        if (err) *err = QStringLiteral("线束不存在或已被删除，请刷新列表后重试。");
+        return false;
+    }
+    m_db.commit();
+    // 最后一条线束被删除后重置自增序列，下次导入从 ID=1 重新开始
+    {
+        QSqlQuery seq(m_db);
+        if (seq.exec(QStringLiteral("SELECT COUNT(*) FROM cut_harness")) && seq.next()
+            && seq.value(0).toInt() == 0) {
+            const QStringList tables = { QStringLiteral("cut_harness"), QStringLiteral("cut_item"),
+                                         QStringLiteral("cut_task"), QStringLiteral("cut_print_log") };
+            for (const QString &table : tables)
+                seq.exec(QStringLiteral("DELETE FROM sqlite_sequence WHERE name='%1'").arg(table));
+        }
+    }
+    return true;
+}
+
+QList<CutMachine> DatabaseManager::cutMachines(QString *err) const
+{
+    if (err) err->clear();
+    if (!isServer()) return RemoteApiClient::instance().cutMachines(err);
+    QList<CutMachine> out;
+    QSqlQuery q(m_db);
+    if (!q.exec(QStringLiteral("SELECT id,code,name,capabilities,active FROM cut_machine ORDER BY id"))) {
+        if (err) *err = q.lastError().text();
+        return out;
+    }
+    while (q.next()) {
+        CutMachine m;
+        m.id = q.value(0).toInt();
+        m.code = q.value(1).toString();
+        m.name = q.value(2).toString();
+        m.capabilities = q.value(3).toString();
+        m.active = q.value(4).toInt();
+        out.append(m);
+    }
+    return out;
+}
+
+bool DatabaseManager::cutSaveMachine(CutMachine *m, QString *err)
+{
+    if (err) err->clear();
+    if (!m) return false;
+    if (!isServer()) return RemoteApiClient::instance().cutSaveMachine(m, err);
+    QSqlQuery q(m_db);
+    if (m->id > 0) {
+        q.prepare(QStringLiteral("UPDATE cut_machine SET code=?,name=?,capabilities=?,active=? WHERE id=?"));
+        q.addBindValue(m->code); q.addBindValue(m->name); q.addBindValue(m->capabilities);
+        q.addBindValue(m->active); q.addBindValue(m->id);
+    } else {
+        q.prepare(QStringLiteral("INSERT INTO cut_machine(code,name,capabilities,active) VALUES(?,?,?,?)"));
+        q.addBindValue(m->code); q.addBindValue(m->name); q.addBindValue(m->capabilities);
+        q.addBindValue(m->active);
+    }
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        return false;
+    }
+    if (m->id <= 0) m->id = q.lastInsertId().toInt();
+    return true;
+}
+
+QList<CutRule> DatabaseManager::cutRules(QString *err) const
+{
+    if (err) err->clear();
+    if (!isServer()) return RemoteApiClient::instance().cutRules(err);
+    QList<CutRule> out;
+    QSqlQuery q(m_db);
+    if (!q.exec(QStringLiteral("SELECT id,field,match_type,match_value,target_machine,enabled "
+                               "FROM cut_rule ORDER BY id"))) {
+        if (err) *err = q.lastError().text();
+        return out;
+    }
+    while (q.next()) {
+        CutRule r;
+        r.id = q.value(0).toInt();
+        r.field = q.value(1).toString();
+        r.matchType = q.value(2).toString();
+        r.matchValue = q.value(3).toString();
+        r.machineId = q.value(4).toString().toInt();
+        r.enabled = q.value(5).toInt();
+        out.append(r);
+    }
+    // 命中多条时：专用件（端子/防水栓）优先于线径范围
+    std::stable_sort(out.begin(), out.end(), [](const CutRule &a, const CutRule &b) {
+        return cutRuleSpecificity(a) < cutRuleSpecificity(b);
+    });
+    return out;
+}
+
+bool DatabaseManager::cutSaveRule(CutRule *r, QString *err)
+{
+    if (err) err->clear();
+    if (!r) return false;
+    if (!isServer()) return RemoteApiClient::instance().cutSaveRule(r, err);
+    if (r->machineId <= 0) {
+        if (err) *err = QStringLiteral("请选择目标机台");
+        return false;
+    }
+    if (r->field.isEmpty()) r->field = QStringLiteral("section");
+    if (r->isRange()) {
+        // 线径规则：匹配值统一存成 "最小-最大"
+        double lo = 0.0, hi = 0.0;
+        if (!cutRuleParseRange(r->matchValue, &lo, &hi)) {
+            if (err) *err = QStringLiteral("线径范围格式不对，应形如 0.5-1.5");
+            return false;
+        }
+        r->matchType = QStringLiteral("range");
+        r->matchValue = QStringLiteral("%1-%2")
+            .arg(QString::number(lo, 'g', 10), QString::number(hi, 'g', 10));
+    } else {
+        if (r->matchValue.trimmed().isEmpty()) {
+            if (err) *err = QStringLiteral("请填写匹配值（如 PP2011101）");
+            return false;
+        }
+        r->matchValue = r->matchValue.trimmed();
+        if (r->matchType.isEmpty()) r->matchType = QStringLiteral("contains");
+    }
+    // 去重：同字段 + 同匹配方式 + 同匹配值（忽略大小写/首尾空格）+ 同目标机台视为重复
+    {
+        QSqlQuery dup(m_db);
+        dup.prepare(QStringLiteral(
+            "SELECT id FROM cut_rule WHERE field=? AND match_type=? "
+            "AND LOWER(TRIM(match_value))=LOWER(TRIM(?)) "
+            "AND target_machine=? AND id<>? LIMIT 1"));
+        dup.addBindValue(r->field);
+        dup.addBindValue(r->matchType);
+        dup.addBindValue(r->matchValue);
+        dup.addBindValue(QString::number(r->machineId));
+        dup.addBindValue(r->id);
+        if (dup.exec() && dup.next()) {
+            if (err) {
+                *err = QStringLiteral("已存在相同规则：%1「%2」→ 同一台机台（规则 #%3）。\n"
+                                      "请直接修改原规则，或换一个匹配值。")
+                           .arg(CutRule::fieldText(r->field), r->matchValue)
+                           .arg(dup.value(0).toInt());
+            }
+            return false;
+        }
+    }
+    QSqlQuery q(m_db);
+    if (r->id > 0) {
+        q.prepare(QStringLiteral("UPDATE cut_rule SET field=?,match_type=?,match_value=?,"
+                                 "target_machine=?,enabled=? WHERE id=?"));
+    } else {
+        q.prepare(QStringLiteral("INSERT INTO cut_rule(field,match_type,match_value,"
+                                 "target_machine,enabled) VALUES(?,?,?,?,?)"));
+    }
+    q.addBindValue(r->field);
+    q.addBindValue(r->matchType);
+    q.addBindValue(r->matchValue);
+    q.addBindValue(QString::number(r->machineId));
+    q.addBindValue(r->enabled);
+    if (r->id > 0) q.addBindValue(r->id);
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        return false;
+    }
+    if (r->id <= 0) r->id = q.lastInsertId().toInt();
+    addOpLog(QStringLiteral("保存派单规则"), CutRule::fieldText(r->field), r->valueText(),
+             QStringLiteral("机台%1").arg(r->machineId));
+    return true;
+}
+
+bool DatabaseManager::cutDeleteRule(int id, QString *err)
+{
+    if (err) err->clear();
+    if (!isServer()) return RemoteApiClient::instance().cutDeleteRule(id, err);
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("DELETE FROM cut_rule WHERE id=?"));
+    q.addBindValue(id);
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool DatabaseManager::cutDispatch(int batchId, int machineId, const QList<int> &itemIds,
+                                  int quantity, QString *err)
+{
+    if (err) err->clear();
+    if (!isServer())
+        return RemoteApiClient::instance().cutDispatch(batchId, machineId, itemIds, quantity, err);
+    if (machineId <= 0) {
+        if (err) *err = QStringLiteral("请选择目标机台");
+        return false;
+    }
+    const QString now = QDateTime::currentDateTime().toString(Qt::ISODate);
+    m_db.transaction();
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("INSERT INTO cut_task(batch_id,item_id,machine_id,quantity,done_qty,status,created_at) "
+                             "VALUES(?,?,?,?,0,1,?)"));
+    for (int itemId : itemIds) {
+        q.addBindValue(batchId);
+        q.addBindValue(itemId);
+        q.addBindValue(machineId);
+        q.addBindValue(quantity > 0 ? quantity : 1);
+        q.addBindValue(now);
+        if (!q.exec()) {
+            if (err) *err = q.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+    m_db.commit();
+    addOpLog(QStringLiteral("派工"), QString(), QString(),
+             QStringLiteral("批次%1 → 机台%2，%3 条").arg(batchId).arg(machineId).arg(itemIds.size()));
+    return true;
+}
+
+// 智能分配的公共计算部分：规则/Excel 指定机台 + 线径线色归组。
+// 只算出「明细 → 机台」建议，不写库；预览与正式派工共用同一套逻辑。
+bool DatabaseManager::cutComputeAssignments(int batchId, QList<CutAssign> *out,
+                                            int *fixedCount, int *balancedCount, QString *err) const
+{
+    if (out) out->clear();
+    if (fixedCount) *fixedCount = 0;
+    if (balancedCount) *balancedCount = 0;
+    const QList<CutMachine> machines = cutMachines(err);
+    QList<CutMachine> active;
+    int otherMachineId = 0;   // 「其他」= 人工/手动下线，未匹配线径规则的任务直接归它
+    for (const CutMachine &m : machines) {
+        if (m.code == QLatin1String("OTHER")) { otherMachineId = m.id; continue; }
+        if (m.active) active.append(m);
+    }
+    if (active.isEmpty()) {
+        if (err) *err = QStringLiteral("没有可用的下线机");
+        return false;
+    }
+    // 已派工数量（用于均衡）：统计本批次各机器现有任务数
+    QMap<int, int> load;
+    for (const CutMachine &m : active) load[m.id] = 0;
+    {
+        QSqlQuery q(m_db);
+        q.prepare(QStringLiteral("SELECT machine_id,COUNT(*) FROM cut_task WHERE batch_id=? GROUP BY machine_id"));
+        q.addBindValue(batchId);
+        if (q.exec())
+            while (q.next()) load[q.value(0).toInt()] += q.value(1).toInt();
+    }
+
+    const QList<CutItem> allItems = cutItems(batchId, err);
+    // 只处理尚未派工的明细
+    QSet<int> dispatched;
+    {
+        QSqlQuery q(m_db);
+        q.prepare(QStringLiteral("SELECT DISTINCT item_id FROM cut_task WHERE batch_id=?"));
+        q.addBindValue(batchId);
+        if (q.exec())
+            while (q.next()) dispatched.insert(q.value(0).toInt());
+    }
+
+    struct Assign { int itemId; int machineId; };
+    QList<Assign> assigns;
+    QSet<int> assignedItems;
+    QHash<int, int> itemMachine;   // itemId → 已确定机台，供材料归组参照
+    int nFixed = 0;
+
+    // 派单规则分两类：
+    //  ① 专用件（防水栓/端子/颜色/材质）——硬约束，命中即锁定机台；
+    //  ② 线径范围——只表示「该机台适合这个线径」，是候选机台而非锁定。
+    // 这样避免大量明细被线径规则一次性锁到同一台机，剩余任务再按候选机台均衡。
+    QList<CutRule> rules = cutRules(err);
+    QList<CutRule> hardRules;
+    QList<CutRule> sectionRules;
+    auto machineActive = [&active](int mid) {
+        for (const CutMachine &m : active) if (m.id == mid) return true;
+        return false;
+    };
+    // 「其他」是人工/手动机台，不参与均衡，但允许作为硬规则目标（如屏蔽件）
+    auto ruleTargetValid = [&active, otherMachineId](int mid) {
+        if (mid == otherMachineId) return true;
+        for (const CutMachine &m : active) if (m.id == mid) return true;
+        return false;
+    };
+    for (const CutRule &r : rules) {
+        if (!r.enabled || r.machineId <= 0 || !ruleTargetValid(r.machineId)) continue;
+        if (r.isRange()) sectionRules.append(r);
+        else hardRules.append(r);
+    }
+    QList<int> activeIds;
+    for (const CutMachine &m : active) activeIds.append(m.id);
+    QHash<int, CutItem> itemById;
+    for (const CutItem &it : allItems) itemById.insert(it.id, it);
+
+    auto ruleMatch = [&hardRules](const CutItem &it) -> int {
+        for (const CutRule &r : hardRules)
+            if (cutRuleMatches(r, it)) return r.machineId;
+        return 0;
+    };
+    // 某条明细适合的机台：命中所有线径规则的并集。
+    // 没有任何线径规则覆盖时返回空列表——该材料保持未分配，等人工指定机台。
+    auto sectionCandidates = [&sectionRules](const CutItem &it) -> QList<int> {
+        QList<int> opts;
+        for (const CutRule &r : sectionRules)
+            if (cutRuleMatches(r, it) && !opts.contains(r.machineId)) opts.append(r.machineId);
+        return opts;
+    };
+
+    // 第一遍：屏蔽件（端子/防水栓/材质含「屏蔽」）→「其他」人工下线，
+    // 五台自动机都不接这类工艺，优先于任何用户规则。
+    if (otherMachineId > 0) {
+        for (const CutItem &it : allItems) {
+            if (dispatched.contains(it.id) || !cutItemHasShield(it)) continue;
+            assigns.append({it.id, otherMachineId});
+            assignedItems.insert(it.id);
+            itemMachine.insert(it.id, otherMachineId);
+            ++nFixed;
+        }
+    }
+    // 第二遍：防水栓/端子等硬约束规则
+    for (const CutItem &it : allItems) {
+        if (dispatched.contains(it.id) || assignedItems.contains(it.id)) continue;
+        const int mid = ruleMatch(it);
+        if (mid > 0) {
+            assigns.append({it.id, mid});
+            load[mid] += 1;
+            assignedItems.insert(it.id);
+            itemMachine.insert(it.id, mid);
+            ++nFixed;
+        }
+    }
+    // 第三遍：不再使用下线表 Excel 的「机台」列。
+    // 该列只是随表带过来的历史填写，实测与派单规则并不一致
+    // （如 828904-1 在 Excel 里写 1，但没有任何规则要求它上一号机），
+    // 当作硬约束会让某一台机台任务量暴涨。机台一律由规则 + 线径能力 + 均衡决定。
+    // 第四遍：剩余任务按「线径 + 线色」归组（同组＝同一种材料），
+    // 同组明细整体派给同一台机台，避免同材料在多台机器间来回换线；
+    // 每组先由线径规则筛出适合机台，再挑当前负载最小的，尽量让各机台任务量接近。
+    int nBalanced = 0;
+    // 已被规则分配到机台的材料组，其剩余明细优先跟随同一机台。
+    // 「其他」（人工/手动下线）不参与跟随，否则同材料里有一条屏蔽件/人工件
+    // 就会把整组正常线径的明细一起拽到人工线。
+    QHash<QString, int> groupPreferred;
+    for (const CutItem &it : allItems) {
+        const QHash<int, int>::const_iterator mit = itemMachine.constFind(it.id);
+        if (mit == itemMachine.constEnd()) continue;
+        if (otherMachineId > 0 && mit.value() == otherMachineId) continue;
+        const QString key = cutMaterialKey(it);
+        QHash<QString, int>::iterator pit = groupPreferred.find(key);
+        if (pit == groupPreferred.end())
+            groupPreferred.insert(key, mit.value());
+        else if (load.value(mit.value(), 0) < load.value(pit.value(), 0))
+            pit.value() = mit.value();
+    }
+
+    QStringList groupOrder;
+    QHash<QString, QList<int>> groups;
+    for (const CutItem &it : allItems) {
+        if (dispatched.contains(it.id) || assignedItems.contains(it.id)) continue;
+        const QString key = cutMaterialKey(it);
+        if (!groups.contains(key)) {
+            groups.insert(key, QList<int>());
+            groupOrder << key;
+        }
+        groups[key].append(it.id);
+    }
+    // 条数多的材料组先占机台，尽量少换线
+    std::stable_sort(groupOrder.begin(), groupOrder.end(),
+                     [&groups](const QString &a, const QString &b) {
+                         return groups.value(a).size() > groups.value(b).size();
+                     });
+    for (const QString &key : groupOrder) {
+        const QList<int> ids = groups.value(key);
+        int target = groupPreferred.value(key, 0);   // ① 同材料已被硬约束到某机台 → 跟随
+        // 0 与「其他」都视为「还没定」：必须按线径规则重新找自动机台
+        if (!machineActive(target)) {
+            QList<int> opts = ids.isEmpty() ? activeIds
+                                            : sectionCandidates(itemById.value(ids.first()));
+            if (opts.isEmpty()) {   // 无线径规则覆盖：归「其他」机台（人工/手动下线）
+                for (int id : ids) assigns.append({id, otherMachineId});
+                continue;
+            }
+            target = opts.first();
+            int minLoad = load.value(target, 0);
+            for (int mid : opts) {                   // ②③ 适合的机台里挑当前最闲的
+                const int l = load.value(mid, 0);
+                if (l < minLoad) { minLoad = l; target = mid; }
+            }
+        }
+        for (int id : ids) assigns.append({id, target});
+        load[target] += ids.size();
+        nBalanced += ids.size();
+    }
+
+    if (assigns.isEmpty()) {
+        if (err) *err = QStringLiteral("没有需要分配的任务（可能已全部派工）");
+        return false;
+    }
+    // 输出前按「截面数值 + 线色」排序：同一种材料连续显示，且 2.5 < 3 < 3.5 < 4 < 35
+    // （不能按字符串排，否则 35 会落到 3 之前）
+    std::stable_sort(assigns.begin(), assigns.end(), [&itemById](const Assign &a, const Assign &b) {
+        const CutItem ia = itemById.value(a.itemId);
+        const CutItem ib = itemById.value(b.itemId);
+        const double sa = cutSectionNumber(ia.section);
+        const double sb = cutSectionNumber(ib.section);
+        if (sa >= 0.0 && sb >= 0.0 && qAbs(sa - sb) > 1e-9) return sa < sb;
+        const int colorCmp = ia.color.trimmed().compare(ib.color.trimmed(), Qt::CaseInsensitive);
+        if (colorCmp != 0) return colorCmp < 0;
+        return cutMaterialKey(ia) < cutMaterialKey(ib);
+    });
+    for (const Assign &a : assigns) out->append({a.itemId, a.machineId});
+    if (fixedCount) *fixedCount = nFixed;
+    if (balancedCount) *balancedCount = nBalanced;
+    return true;
+}
+
+// 保留原有「智能分配并直接派工」接口（供其它调用方兼容）
+bool DatabaseManager::cutAutoDispatch(int batchId, int quantity, int *fixedCount,
+                                      int *balancedCount, QString *err)
+{
+    if (err) err->clear();
+    if (!isServer())
+        return RemoteApiClient::instance().cutAutoDispatch(batchId, quantity, fixedCount,
+                                                           balancedCount, err);
+    QList<CutAssign> assigns;
+    if (!cutComputeAssignments(batchId, &assigns, fixedCount, balancedCount, err))
+        return false;
+    const int nF = fixedCount ? *fixedCount : 0;
+    const int nB = balancedCount ? *balancedCount : 0;
+    const QString now = QDateTime::currentDateTime().toString(Qt::ISODate);
+    m_db.transaction();
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("INSERT INTO cut_task(batch_id,item_id,machine_id,quantity,done_qty,status,created_at) "
+                             "VALUES(?,?,?,?,0,1,?)"));
+    for (const CutAssign &a : assigns) {
+        if (a.machineId <= 0) continue;   // 未分配机台的行不写任务，留给人工指定
+        q.addBindValue(batchId);
+        q.addBindValue(a.itemId);
+        q.addBindValue(a.machineId);
+        q.addBindValue(quantity > 0 ? quantity : 1);
+        q.addBindValue(now);
+        if (!q.exec()) {
+            if (err) *err = q.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+    m_db.commit();
+    addOpLog(QStringLiteral("智能派工"), QString(), QString(),
+             QStringLiteral("批次%1：固定%2 条 + 均衡%3 条").arg(batchId).arg(nF).arg(nB));
+    return true;
+}
+
+// 智能分配预览：只返回建议机台（以虚拟任务行形式），不写数据库
+bool DatabaseManager::cutAutoDispatchPreview(int batchId, QList<CutTask> *tasks,
+                                             int *fixedCount, int *balancedCount, QString *err) const
+{
+    if (err) err->clear();
+    if (tasks) tasks->clear();
+    if (!isServer())
+        return RemoteApiClient::instance().cutAutoDispatchPreview(batchId, tasks, fixedCount,
+                                                                  balancedCount, err);
+    QList<CutAssign> assigns;
+    if (!cutComputeAssignments(batchId, &assigns, fixedCount, balancedCount, err))
+        return false;
+    QHash<int, CutItem> itemsById;
+    for (const CutItem &it : cutItems(batchId, err)) itemsById.insert(it.id, it);
+    QString batchCreatedAt;
+    for (const CutBatch &b : cutBatches(err))
+        if (b.id == batchId) { batchCreatedAt = b.createdAt; break; }
+    for (const CutAssign &a : assigns) {
+        const CutItem it = itemsById.value(a.itemId);
+        if (it.id <= 0) continue;
+        CutTask t;
+        t.id = 0;                 // 0 = 尚未派工（预览行）
+        t.batchId = batchId;
+        t.itemId = it.id;
+        t.machineId = a.machineId;
+        t.quantity = 1;
+        t.status = 0;
+        t.seq = it.seq;
+        t.circuit = it.circuit;
+        t.color = it.color;
+        t.wireLength = it.wireLength;
+        t.section = it.section;
+        t.workLeft = it.workLeft;
+        t.workRight = it.workRight;
+        t.batchCreatedAt = batchCreatedAt;
+        if (tasks) tasks->append(t);
+    }
+    return true;
+}
+
+// 确认派工：把预览中（可能已被用户调整机台的）建议正式写成任务
+bool DatabaseManager::cutCommitDispatch(int batchId, const QList<CutAssign> &assigns,
+                                        int quantity, QString *err)
+{
+    if (err) err->clear();
+    if (!isServer())
+        return RemoteApiClient::instance().cutCommitDispatch(batchId, assigns, quantity, err);
+    if (assigns.isEmpty()) {
+        if (err) *err = QStringLiteral("没有需要派工的任务");
+        return false;
+    }
+    const QString now = QDateTime::currentDateTime().toString(Qt::ISODate);
+    m_db.transaction();
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("INSERT INTO cut_task(batch_id,item_id,machine_id,quantity,done_qty,status,created_at) "
+                             "VALUES(?,?,?,?,0,1,?)"));
+    for (const CutAssign &a : assigns) {
+        if (a.machineId <= 0) continue;   // 未分配机台的行不写任务，留给人工指定
+        q.addBindValue(batchId);
+        q.addBindValue(a.itemId);
+        q.addBindValue(a.machineId);
+        q.addBindValue(quantity > 0 ? quantity : 1);
+        q.addBindValue(now);
+        if (!q.exec()) {
+            if (err) *err = q.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+    m_db.commit();
+    int committed = 0;
+    for (const CutAssign &a : assigns) if (a.machineId > 0) ++committed;
+    addOpLog(QStringLiteral("确认派工"), QString(), QString(),
+             QStringLiteral("批次%1：正式派工 %2 条").arg(batchId).arg(committed));
+    return true;
+}
+
+// 待生产任务改派机台：只改 machine_id，不动批次/明细/数量/状态
+bool DatabaseManager::cutRetask(int taskId, int machineId, QString *err)
+{
+    if (err) err->clear();
+    if (!isServer()) return RemoteApiClient::instance().cutRetask(taskId, machineId, err);
+    if (taskId <= 0 || machineId <= 0) {
+        if (err) *err = QStringLiteral("任务或目标机台无效");
+        return false;
+    }
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("UPDATE cut_task SET machine_id=? WHERE id=? AND status=1"));
+    q.addBindValue(machineId);
+    q.addBindValue(taskId);
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        return false;
+    }
+    if (q.numRowsAffected() <= 0) {
+        if (err) *err = QStringLiteral("任务不存在，或已不在「待生产」状态（只有待生产任务可改派）");
+        return false;
+    }
+    addOpLog(QStringLiteral("任务改派"), QString::number(taskId), QString(),
+             QStringLiteral("改派到机台%1").arg(machineId));
+    return true;
+}
+
+QList<CutTask> DatabaseManager::cutTasks(int batchId, int machineId, const QString &status,
+                                         QString *err) const
+{
+    if (err) err->clear();
+    if (!isServer()) return RemoteApiClient::instance().cutTasks(batchId, machineId, status, err);
+    QList<CutTask> out;
+    QStringList cond;
+    QVariantList binds;
+    if (batchId > 0) { cond << QStringLiteral("t.batch_id=?"); binds << batchId; }
+    if (machineId > 0) { cond << QStringLiteral("t.machine_id=?"); binds << machineId; }
+    if (status == QLatin1String("pending")) cond << QStringLiteral("t.status=0");
+    else if (status == QLatin1String("assigned")) cond << QStringLiteral("t.status=1");
+    else if (status == QLatin1String("doing")) cond << QStringLiteral("t.status=2");
+    else if (status == QLatin1String("done")) cond << QStringLiteral("t.status=3");
+    const QString where = cond.isEmpty() ? QString() : QStringLiteral(" WHERE ") + cond.join(QStringLiteral(" AND "));
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT t.id,t.batch_id,t.item_id,t.machine_id,t.quantity,t.done_qty,"
+                             "t.status,t.operator,t.created_at,t.finished_at,"
+                             "i.seq,i.circuit,i.color,i.wire_length,i.section,"
+                             "i.work_left,i.work_right,b.created_at,"
+                             "i.material,i.strip_left,i.strip_right,i.terminal_left,i.terminal_right,"
+                             "b.name,b.batch_no "
+                             "FROM cut_task t LEFT JOIN cut_item i ON i.id=t.item_id "
+                             "LEFT JOIN cut_harness b ON b.id=t.batch_id") + where
+              + QStringLiteral(" ORDER BY t.id"));
+    for (const QVariant &v : binds) q.addBindValue(v);
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        return out;
+    }
+    while (q.next()) out.append(cutTaskFromQuery(q));
+    if (!out.isEmpty()) {
+        // 任务号统一为「批次导入时间 + 批次内序号」，按全量任务编号，筛选后不变化
+        QHash<int, int> batchSeq;
+        QHash<int, QString> taskNoById;
+        QSqlQuery nq(m_db);
+        nq.exec(QStringLiteral(
+            "SELECT t.id,t.batch_id,b.created_at FROM cut_task t"
+            " LEFT JOIN cut_harness b ON b.id=t.batch_id ORDER BY t.id"));
+        while (nq.next()) {
+            const int id = nq.value(0).toInt();
+            const int bid = nq.value(1).toInt();
+            const int no = ++batchSeq[bid];
+            const QDateTime dt = QDateTime::fromString(nq.value(2).toString(), Qt::ISODate);
+            const QString stamp = dt.isValid() ? dt.toString(QStringLiteral("yyyyMMddHHmm"))
+                                               : QStringLiteral("000000000000");
+            taskNoById.insert(id, QStringLiteral("%1-%2").arg(stamp).arg(no));
+        }
+        for (CutTask &t : out) t.taskNo = taskNoById.value(t.id);
+    }
+    return out;
+}
+
+bool DatabaseManager::cutFinishTask(int taskId, int doneQty, const QString &operatorName, QString *err)
+{
+    if (err) err->clear();
+    if (!isServer()) return RemoteApiClient::instance().cutFinishTask(taskId, doneQty, operatorName, err);
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("UPDATE cut_task SET done_qty=?,status=3,operator=?,finished_at=? WHERE id=?"));
+    q.addBindValue(doneQty);
+    q.addBindValue(operatorName);
+    q.addBindValue(QDateTime::currentDateTime().toString(Qt::ISODate));
+    q.addBindValue(taskId);
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        return false;
+    }
+    addOpLog(QStringLiteral("完成下线任务"), QString(), operatorName,
+             QStringLiteral("任务%1，完成 %2 条").arg(taskId).arg(doneQty));
+    return true;
+}
+
+bool DatabaseManager::cutDeviceAuth(int machineNo, const QString &deviceKey,
+                                    int *machineId, QString *machineName, QString *err) const
+{
+    if (err) err->clear();
+    if (!isServer()) {
+        if (err) *err = QStringLiteral("设备认证只能在服务器主机执行");
+        return false;
+    }
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "SELECT machine_id,machine_name FROM cut_device"
+        " WHERE machine_id=? AND device_key=? AND active=1"));
+    q.addBindValue(machineNo);
+    q.addBindValue(deviceKey);
+    if (!q.exec() || !q.next()) {
+        if (err) *err = q.lastError().type() == QSqlError::NoError
+                ? QStringLiteral("机台号或设备密钥错误") : q.lastError().text();
+        return false;
+    }
+    if (machineId) *machineId = q.value(0).toInt();
+    if (machineName) *machineName = q.value(1).toString();
+    return true;
+}
+
+bool DatabaseManager::cutStartTask(int taskId, int machineId, QString *err)
+{
+    if (err) err->clear();
+    if (!isServer()) {
+        if (err) *err = QStringLiteral("设备任务只能在服务器主机更新");
+        return false;
+    }
+    QSqlDatabase db = QSqlDatabase::database();
+    if (!db.transaction()) {
+        if (err) *err = db.lastError().text();
+        return false;
+    }
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT status FROM cut_task WHERE id=? AND machine_id=?"));
+    q.addBindValue(taskId);
+    q.addBindValue(machineId);
+    if (!q.exec() || !q.next()) {
+        db.rollback();
+        if (err) *err = QStringLiteral("任务不存在或不属于当前机台");
+        return false;
+    }
+    const int status = q.value(0).toInt();
+    if (status == 3 || status == 4) {
+        db.rollback();
+        if (err) *err = QStringLiteral("任务已结束，不能开始");
+        return false;
+    }
+    q.prepare(QStringLiteral("UPDATE cut_task SET status=2 WHERE id=?"));
+    q.addBindValue(taskId);
+    if (!q.exec()) {
+        db.rollback();
+        if (err) *err = q.lastError().text();
+        return false;
+    }
+    const QString now = QDateTime::currentDateTime().toString(Qt::ISODate);
+    q.prepare(QStringLiteral(
+        "INSERT INTO cut_device_state(machine_id,current_task_id,last_start_at,updated_at)"
+        " VALUES(?,?,?,?) ON CONFLICT(machine_id) DO UPDATE SET"
+        " current_task_id=excluded.current_task_id,"
+        " last_start_at=excluded.last_start_at, updated_at=excluded.updated_at"));
+    q.addBindValue(machineId);
+    q.addBindValue(taskId);
+    q.addBindValue(now);
+    q.addBindValue(now);
+    if (!q.exec()) {
+        db.rollback();
+        if (err) *err = q.lastError().text();
+        return false;
+    }
+    db.commit();
+    addOpLog(QStringLiteral("下线任务开始"), QString(), QStringLiteral("设备%1").arg(machineId),
+             QStringLiteral("任务%1").arg(taskId));
+    return true;
+}
+
+bool DatabaseManager::cutConfirmTask(int taskId, int machineId, const QString &operatorName,
+                                     int *doneQty, int *quantity, int *status, bool *finished,
+                                     QString *err, int step)
+{
+    if (err) err->clear();
+    if (!isServer()) {
+        if (err) *err = QStringLiteral("设备任务只能在服务器主机更新");
+        return false;
+    }
+    QSqlDatabase db = QSqlDatabase::database();
+    if (!db.transaction()) {
+        if (err) *err = db.lastError().text();
+        return false;
+    }
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "SELECT quantity,done_qty,status FROM cut_task WHERE id=? AND machine_id=?"));
+    q.addBindValue(taskId);
+    q.addBindValue(machineId);
+    if (!q.exec() || !q.next()) {
+        db.rollback();
+        if (err) *err = QStringLiteral("任务不存在或不属于当前机台");
+        return false;
+    }
+    const int total = q.value(0).toInt();
+    const int done = q.value(1).toInt();
+    const int oldStatus = q.value(2).toInt();
+    if (oldStatus == 3 || oldStatus == 4) {
+        db.rollback();
+        if (err) *err = QStringLiteral("任务已结束，不能确认");
+        return false;
+    }
+    const int nextDone = qMin(total, done + qMax(1, step));
+    const bool isFinished = (nextDone >= total);
+    const int nextStatus = isFinished ? 3 : 2;
+    const QString now = QDateTime::currentDateTime().toString(Qt::ISODate);
+
+    q.prepare(QStringLiteral(
+        "UPDATE cut_task SET done_qty=?,status=?,operator=?,"
+        "finished_at=CASE WHEN ? THEN ? ELSE finished_at END WHERE id=?"));
+    q.addBindValue(nextDone);
+    q.addBindValue(nextStatus);
+    q.addBindValue(operatorName);
+    q.addBindValue(isFinished);
+    q.addBindValue(isFinished ? now : QString());
+    q.addBindValue(taskId);
+    if (!q.exec()) {
+        db.rollback();
+        if (err) *err = q.lastError().text();
+        return false;
+    }
+    q.prepare(QStringLiteral(
+        "INSERT INTO cut_device_state(machine_id,current_task_id,last_confirm_at,updated_at)"
+        " VALUES(?,?,?,?) ON CONFLICT(machine_id) DO UPDATE SET"
+        " current_task_id=excluded.current_task_id,"
+        " last_confirm_at=excluded.last_confirm_at, updated_at=excluded.updated_at"));
+    q.addBindValue(machineId);
+    q.addBindValue(taskId);
+    q.addBindValue(now);
+    q.addBindValue(now);
+    if (!q.exec()) {
+        db.rollback();
+        if (err) *err = q.lastError().text();
+        return false;
+    }
+    db.commit();
+    if (doneQty) *doneQty = nextDone;
+    if (quantity) *quantity = total;
+    if (status) *status = nextStatus;
+    if (finished) *finished = isFinished;
+    addOpLog(isFinished ? QStringLiteral("下线任务完成") : QStringLiteral("下线任务报产"),
+             QString(), operatorName,
+             QStringLiteral("任务%1，完成 %2/%3").arg(taskId).arg(nextDone).arg(total));
+    return true;
+}
+
+bool DatabaseManager::cutLogPrint(int taskId, int machineId, const QString &operatorName,
+                                  const QString &labelNo, int copies, const QString &result,
+                                  QString *err)
+{
+    if (err) err->clear();
+    if (!isServer()) {
+        if (err) *err = QStringLiteral("打印日志只能在服务器主机写入");
+        return false;
+    }
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral(
+        "INSERT INTO cut_print_log(task_id,machine_id,operator,label_no,copies,result,created_at)"
+        " VALUES(?,?,?,?,?,?,?)"));
+    q.addBindValue(taskId);
+    q.addBindValue(machineId);
+    q.addBindValue(operatorName);
+    q.addBindValue(labelNo);
+    q.addBindValue(copies);
+    q.addBindValue(result);
+    q.addBindValue(QDateTime::currentDateTime().toString(Qt::ISODate));
+    if (!q.exec()) {
+        if (err) *err = q.lastError().text();
+        return false;
+    }
     return true;
 }
 

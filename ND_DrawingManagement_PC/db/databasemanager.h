@@ -8,6 +8,8 @@
 #include "model/product.h"
 #include "util/stocktypes.h"
 #include "util/chiptypes.h"
+#include "util/moldtypes.h"
+#include "util/cuttypes.h"
 
 // 数据库管理：SQLite 单实例，负责建表与 CRUD
 class DatabaseManager : public QObject
@@ -63,6 +65,58 @@ public:
                                QString *err = nullptr) const;          // mode: hardware / model
     bool chipSave(ChipItem *item, QString *err = nullptr);             // 新增时写回 id
     bool chipDelete(int id, QString *err = nullptr);
+
+    // ---- 端子机模具台账 ----
+    // status: all / incomplete(待完善) / complete / checked；keyword 匹配模具号/端子/线束/线径
+    QList<MoldItem> moldSearch(const QString &keyword, const QString &status,
+                               int limit, int *total = nullptr, QString *err = nullptr) const;
+    bool moldSave(MoldItem *item, QString *err = nullptr);             // 新增时写回 id
+    bool moldDelete(int id, QString *err = nullptr);
+
+    // ---- 线束下线：批次/明细/任务/机器 ----
+    QList<CutBatch> cutBatches(QString *err = nullptr) const;
+    QList<CutItem> cutItems(int batchId, QString *err = nullptr) const;
+    // 导入：以批次名（型号）新建批次并写入明细；返回批次 id，失败 -1
+    int cutImportBatch(const CutBatch &batch, const QList<CutItem> &items, QString *err = nullptr);
+    bool cutDeleteBatch(int batchId, QString *err = nullptr);
+    QList<CutMachine> cutMachines(QString *err = nullptr) const;
+    bool cutSaveMachine(CutMachine *m, QString *err = nullptr);
+    // 派单规则：约束线径/端子/防水栓只能发到指定机台（如 PP2011101 → 一号机）
+    QList<CutRule> cutRules(QString *err = nullptr) const;
+    bool cutSaveRule(CutRule *r, QString *err = nullptr);   // 新增时写回 id
+    bool cutDeleteRule(int id, QString *err = nullptr);
+    // 派工：把某批次的明细按 machineId 生成任务（每条明细一条任务）
+    bool cutDispatch(int batchId, int machineId, const QList<int> &itemIds,
+                     int quantity, QString *err = nullptr);
+    // 智能分配：防水栓/端子等规则先锁定机台，其余按线径能力 + 线色归组均衡分配。
+    // 返回是否成功；通过 fixedCount/balancedCount 回传分配统计。
+    bool cutAutoDispatch(int batchId, int quantity, int *fixedCount, int *balancedCount,
+                         QString *err = nullptr);
+    // 智能分配预览：只计算建议机台（规则锁定 + 线径线色归组），不生成任务
+    bool cutAutoDispatchPreview(int batchId, QList<CutTask> *tasks,
+                                int *fixedCount, int *balancedCount, QString *err = nullptr) const;
+    // 确认派工：把预览建议（用户可改机台）一次性写成正式任务
+    bool cutCommitDispatch(int batchId, const QList<CutAssign> &assigns,
+                           int quantity, QString *err = nullptr);
+    // 已派工但仍是「待生产」的任务，允许手动改派到另一台机台
+    bool cutRetask(int taskId, int machineId, QString *err = nullptr);
+    QList<CutTask> cutTasks(int batchId, int machineId, const QString &status,
+                            QString *err = nullptr) const;
+    // 客户端回传：完成/部分完成一条任务，写回完成数量与操作员
+    bool cutFinishTask(int taskId, int doneQty, const QString &operatorName,
+                       QString *err = nullptr);
+
+    // 下线机设备端
+    bool cutDeviceAuth(int machineNo, const QString &deviceKey,
+                       int *machineId, QString *machineName, QString *err = nullptr) const;
+    bool cutStartTask(int taskId, int machineId, QString *err = nullptr);
+    // step：本次报产条数（默认 1）。设备端点「已完成」传整条剩余数量，一次完成
+    bool cutConfirmTask(int taskId, int machineId, const QString &operatorName,
+                        int *doneQty, int *quantity, int *status, bool *finished,
+                        QString *err = nullptr, int step = 1);
+    bool cutLogPrint(int taskId, int machineId, const QString &operatorName,
+                     const QString &labelNo, int copies, const QString &result,
+                     QString *err = nullptr);
 
     static QStringList categories();   // 固定 7 大产品分类
 
@@ -148,6 +202,7 @@ private:
     explicit DatabaseManager(QObject *parent = nullptr);
     void createTables();
     void ensureProductColumns(); // 为已存在的库补齐新增列（数量三字段）
+    void ensureMoldColumns();    // 为已存在的 mold_item 表补齐新增列
     void migrateLegacyProductTable();  // 旧库 UNIQUE(category,material_code) 迁移为 UNIQUE(category,model)
     void renameDrawingsByNameModel();    // 存量图纸归档目录修正（保留原文件名，幂等）
     void dedupeDrawings();               // 清理内容完全相同的重复图纸记录（保留最早一条）
@@ -160,6 +215,9 @@ private:
     void fixChipBrandCountry();        // 一次性订正初始表格把恩智浦（NXP）误记成德国的数据
     void migrateHwSwToExt();             // 历史控制器 product 列的硬件/软件版本迁移进 product_ext
     void loadExtFields(Product &p) const;
+    // 智能分配公共计算：规则锁定机台 + 线径线色归组，供预览与正式派工复用
+    bool cutComputeAssignments(int batchId, QList<CutAssign> *out,
+                               int *fixedCount, int *balancedCount, QString *err) const;
 
     QSqlDatabase m_db;
     QString m_storageRoot;

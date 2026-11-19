@@ -18,6 +18,7 @@ class QButtonGroup;
 class QPushButton;
 class QProgressBar;
 class LanHttpServer;
+enum class PackageArch;
 
 // 设置页：服务器主机显示全部管理 tab；客户端只显示「服务器连接」
 class SettingsDialog : public QWidget
@@ -71,8 +72,14 @@ private slots:
     void onUploadUpdatePackage();
     void onPickAndroidPackage();
     void onUploadAndroidPackage();
+    void onPickDeviceX86Package();
+    void onUploadDeviceX86Package();
+    void onPickDeviceX64Package();
+    void onUploadDeviceX64Package();
 
 private:
+    void pickDevicePackage(PackageArch arch);
+    void uploadDevicePackage(PackageArch arch);
     void buildFieldTab();
     void buildUserTab();
     void buildImportTab();
@@ -144,6 +151,14 @@ private:
     QLabel *m_lblMobileInfo = nullptr;
     QLabel *m_lblMobileFile = nullptr;
     QString m_androidFilePath;
+
+    // 下线机 Device (AutoIt exe)：32 位 / 64 位各自保存一份
+    QLabel *m_lblDeviceX86Info = nullptr;
+    QLabel *m_lblDeviceX86File = nullptr;
+    QString m_deviceX86FilePath;
+    QLabel *m_lblDeviceX64Info = nullptr;
+    QLabel *m_lblDeviceX64File = nullptr;
+    QString m_deviceX64FilePath;
 
     // 导入
     QComboBox *m_cmbImportCat = nullptr;

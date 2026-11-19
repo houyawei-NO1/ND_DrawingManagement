@@ -10,6 +10,8 @@
 #include "model/product.h"
 #include "util/stocktypes.h"
 #include "util/chiptypes.h"
+#include "util/moldtypes.h"
+#include "util/cuttypes.h"
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -102,6 +104,35 @@ public:
                                QString *err = nullptr) const;
     bool chipSave(ChipItem *item, QString *err);
     bool chipDelete(int id, QString *err);
+
+    // ---- 端子机模具台账（只读 / 写入，与 DatabaseManager 同名方法对齐）----
+    QList<MoldItem> moldSearch(const QString &keyword, const QString &status,
+                               int limit, int *total = nullptr, QString *err = nullptr) const;
+    bool moldSave(MoldItem *item, QString *err);
+    bool moldDelete(int id, QString *err);
+
+    // ---- 线束下线（只读 / 写入，与 DatabaseManager 同名方法对齐）----
+    QList<CutBatch> cutBatches(QString *err = nullptr) const;
+    QList<CutItem> cutItems(int batchId, QString *err = nullptr) const;
+    int cutImportBatch(const CutBatch &batch, const QList<CutItem> &items, QString *err);
+    bool cutDeleteBatch(int batchId, QString *err);
+    QList<CutMachine> cutMachines(QString *err = nullptr) const;
+    bool cutSaveMachine(CutMachine *m, QString *err);
+    QList<CutRule> cutRules(QString *err = nullptr) const;
+    bool cutSaveRule(CutRule *r, QString *err);
+    bool cutDeleteRule(int id, QString *err);
+    bool cutDispatch(int batchId, int machineId, const QList<int> &itemIds,
+                     int quantity, QString *err);
+    bool cutAutoDispatch(int batchId, int quantity, int *fixedCount, int *balancedCount,
+                         QString *err);
+    bool cutAutoDispatchPreview(int batchId, QList<CutTask> *tasks,
+                                int *fixedCount, int *balancedCount, QString *err) const;
+    bool cutCommitDispatch(int batchId, const QList<CutAssign> &assigns,
+                           int quantity, QString *err);
+    bool cutRetask(int taskId, int machineId, QString *err);
+    QList<CutTask> cutTasks(int batchId, int machineId, const QString &status,
+                            QString *err = nullptr) const;
+    bool cutFinishTask(int taskId, int doneQty, const QString &operatorName, QString *err);
 
 private:
     explicit RemoteApiClient(QObject *parent = nullptr);

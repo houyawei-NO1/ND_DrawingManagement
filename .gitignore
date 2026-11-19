@@ -1,2 +1,4 @@
 build/
 ND_DrawingManagement_PC/installer/
+ND_DrawingManagement_PC/_build_check/
+ND_DrawingManagement_PC/_ocr_check/

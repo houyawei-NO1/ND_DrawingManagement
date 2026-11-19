@@ -72,7 +72,12 @@ SettingsDialog::SettingsDialog(QWidget *parent) : QWidget(parent)
     setWindowTitle(QStringLiteral("设置"));
 
     QVBoxLayout *root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
     m_tabs = new QTabWidget(this);
+    m_tabs->setObjectName(QStringLiteral("darkMenuTabs"));
+    m_tabs->setAttribute(Qt::WA_StyledBackground, true);
+    m_tabs->tabBar()->setAttribute(Qt::WA_StyledBackground, true);
 
     // 「本机角色」两种角色都显示：角色选错时不必再去注册表里删配置
     buildRoleTab();
@@ -175,6 +180,56 @@ void SettingsDialog::buildVersionTab()
     connect(btnUploadApk, &QPushButton::clicked, this, &SettingsDialog::onUploadAndroidPackage);
     mrow->addWidget(btnUploadApk);
     lay->addLayout(mrow);
+
+    // ===== 下线机 Device（AutoIt exe）：32 位 / 64 位分别上传、分别分发 =====
+    QLabel *deviceTip = new QLabel(QStringLiteral(
+        "下线机设备端：4 台 WinXP 上传 32 位 exe，1 台 Win10 上传 64 位 exe。安装包由 AutoIt 打包脚本"
+        "生成，文件名为「下线机设备20261119-b33-x86.exe / -x64.exe」（以 -x86.exe / -x64.exe 结尾）；"
+        "现场主界面点「检查更新」时按自身位数自动取对应版本。"), page);
+    deviceTip->setObjectName(QStringLiteral("previewInfo"));
+    deviceTip->setWordWrap(true);
+    lay->addWidget(deviceTip);
+
+    m_lblDeviceX86Info = new QLabel(QStringLiteral("服务器下线机 32 位版本：点「刷新」查询"), page);
+    m_lblDeviceX86Info->setWordWrap(true);
+    lay->addWidget(m_lblDeviceX86Info);
+
+    QHBoxLayout *d86row = new QHBoxLayout();
+    m_lblDeviceX86File = new QLabel(QStringLiteral("未选择 32 位安装包"), page);
+    m_lblDeviceX86File->setObjectName(QStringLiteral("previewInfo"));
+    d86row->addWidget(m_lblDeviceX86File, 1);
+    QPushButton *btnPickDev86 = new QPushButton(QStringLiteral("选择 32 位安装包"), page);
+    btnPickDev86->setObjectName(QStringLiteral("btnGhost"));
+    btnPickDev86->setCursor(Qt::PointingHandCursor);
+    connect(btnPickDev86, &QPushButton::clicked, this, &SettingsDialog::onPickDeviceX86Package);
+    d86row->addWidget(btnPickDev86);
+    QPushButton *btnUploadDev86 = new QPushButton(QStringLiteral("上传 32 位"), page);
+    btnUploadDev86->setObjectName(QStringLiteral("btnEntry"));
+    btnUploadDev86->setCursor(Qt::PointingHandCursor);
+    connect(btnUploadDev86, &QPushButton::clicked, this, &SettingsDialog::onUploadDeviceX86Package);
+    d86row->addWidget(btnUploadDev86);
+    lay->addLayout(d86row);
+
+    m_lblDeviceX64Info = new QLabel(QStringLiteral("服务器下线机 64 位版本：点「刷新」查询"), page);
+    m_lblDeviceX64Info->setWordWrap(true);
+    lay->addWidget(m_lblDeviceX64Info);
+
+    QHBoxLayout *d64row = new QHBoxLayout();
+    m_lblDeviceX64File = new QLabel(QStringLiteral("未选择 64 位安装包"), page);
+    m_lblDeviceX64File->setObjectName(QStringLiteral("previewInfo"));
+    d64row->addWidget(m_lblDeviceX64File, 1);
+    QPushButton *btnPickDev64 = new QPushButton(QStringLiteral("选择 64 位安装包"), page);
+    btnPickDev64->setObjectName(QStringLiteral("btnGhost"));
+    btnPickDev64->setCursor(Qt::PointingHandCursor);
+    connect(btnPickDev64, &QPushButton::clicked, this, &SettingsDialog::onPickDeviceX64Package);
+    d64row->addWidget(btnPickDev64);
+    QPushButton *btnUploadDev64 = new QPushButton(QStringLiteral("上传 64 位"), page);
+    btnUploadDev64->setObjectName(QStringLiteral("btnEntry"));
+    btnUploadDev64->setCursor(Qt::PointingHandCursor);
+    connect(btnUploadDev64, &QPushButton::clicked, this, &SettingsDialog::onUploadDeviceX64Package);
+    d64row->addWidget(btnUploadDev64);
+    lay->addLayout(d64row);
+
     lay->addStretch(1);
     m_tabs->addTab(page, QStringLiteral("版本管理"));
 
@@ -203,6 +258,10 @@ void SettingsDialog::refreshUpdateInfo()
         m_lblUpdateInfo->setText(lines.join(QLatin1Char('\n')));
         if (m_lblMobileInfo)
             m_lblMobileInfo->setText(QStringLiteral("服务器手机版本：未连接服务器，点「刷新」重试"));
+        if (m_lblDeviceX86Info)
+            m_lblDeviceX86Info->setText(QStringLiteral("服务器下线机 32 位版本：未连接服务器，点「刷新」重试"));
+        if (m_lblDeviceX64Info)
+            m_lblDeviceX64Info->setText(QStringLiteral("服务器下线机 64 位版本：未连接服务器，点「刷新」重试"));
         return;
     }
     QApplication::setOverrideCursor(Qt::WaitCursor);
@@ -210,6 +269,12 @@ void SettingsDialog::refreshUpdateInfo()
     const UpdateInfo info = UpdateManager::instance().checkUpdate(&err);
     QString merr;
     const UpdateInfo mobile = UpdateManager::instance().checkUpdate(&merr, PackageKind::Android);
+    QString derr86;
+    const UpdateInfo dev86 = UpdateManager::instance().checkUpdate(
+        &derr86, PackageKind::Device, PackageArch::X86);
+    QString derr64;
+    const UpdateInfo dev64 = UpdateManager::instance().checkUpdate(
+        &derr64, PackageKind::Device, PackageArch::X64);
     QApplication::restoreOverrideCursor();
     m_updateInfoLoaded = true;
     if (info.available) {
@@ -235,6 +300,26 @@ void SettingsDialog::refreshUpdateInfo()
             m_lblMobileInfo->setText(QStringLiteral("服务器手机版本：%1")
                                          .arg(merr.isEmpty()
                                                   ? QStringLiteral("暂无 APK，请先上传") : merr));
+    }
+    if (m_lblDeviceX86Info) {
+        if (dev86.available)
+            m_lblDeviceX86Info->setText(QStringLiteral("服务器下线机 32 位版本：%1（%2）")
+                                            .arg(dev86.version,
+                                                 UpdateManager::readableSize(dev86.size)));
+        else
+            m_lblDeviceX86Info->setText(QStringLiteral("服务器下线机 32 位版本：%1")
+                                            .arg(derr86.isEmpty()
+                                                     ? QStringLiteral("暂无 32 位安装包") : derr86));
+    }
+    if (m_lblDeviceX64Info) {
+        if (dev64.available)
+            m_lblDeviceX64Info->setText(QStringLiteral("服务器下线机 64 位版本：%1（%2）")
+                                            .arg(dev64.version,
+                                                 UpdateManager::readableSize(dev64.size)));
+        else
+            m_lblDeviceX64Info->setText(QStringLiteral("服务器下线机 64 位版本：%1")
+                                            .arg(derr64.isEmpty()
+                                                     ? QStringLiteral("暂无 64 位安装包") : derr64));
     }
 }
 
@@ -331,6 +416,87 @@ void SettingsDialog::onUploadAndroidPackage()
     m_lblUpdateStatus->setText(QStringLiteral(
         "上传完成：服务器手机安装包已更新，同一局域网的手机可在「关于 → 检查更新」下载安装。"));
     refreshUpdateInfo();
+}
+
+void SettingsDialog::pickDevicePackage(PackageArch arch)
+{
+    const bool is64 = (arch == PackageArch::X64);
+    const QString bitText = is64 ? QStringLiteral("64") : QStringLiteral("32");
+    const QString devDir = QStringLiteral(
+        "E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_Device");
+    const QString filter = is64
+        ? QStringLiteral("64 位下线机安装包 (下线机设备*x64.exe);;旧版命名 (*_*_x64.exe);;所有文件 (*)")
+        : QStringLiteral("32 位下线机安装包 (下线机设备*x86.exe);;旧版命名 (*_*_x86.exe);;所有文件 (*)");
+    const QString path = QFileDialog::getOpenFileName(
+        this, QStringLiteral("选择 %1 位下线机安装包").arg(bitText),
+        QDir(devDir).exists() ? devDir : QString(), filter);
+    if (path.isEmpty())
+        return;
+
+    const QFileInfo fi(path);
+    const QString selected = QStringLiteral("已选择：%1（%2）")
+                                 .arg(fi.fileName(), UpdateManager::readableSize(fi.size()));
+    if (is64) {
+        m_deviceX64FilePath = path;
+        if (m_lblDeviceX64File) m_lblDeviceX64File->setText(selected);
+    } else {
+        m_deviceX86FilePath = path;
+        if (m_lblDeviceX86File) m_lblDeviceX86File->setText(selected);
+    }
+    m_lblUpdateStatus->setText(QStringLiteral(
+        "已选择 %1 位安装包，点击同一行的「上传」按钮上传到服务器。").arg(bitText));
+    m_barUpdate->setValue(0);
+}
+
+void SettingsDialog::uploadDevicePackage(PackageArch arch)
+{
+    const bool is64 = (arch == PackageArch::X64);
+    const QString bitText = is64 ? QStringLiteral("64") : QStringLiteral("32");
+    const QString &path = is64 ? m_deviceX64FilePath : m_deviceX86FilePath;
+    if (path.isEmpty() || !QFileInfo::exists(path)) {
+        NdMessageBox::warning(this, QStringLiteral("上传下线机安装包"),
+                              QStringLiteral("请先选择 %1 位安装包（.exe）").arg(bitText));
+        return;
+    }
+    m_barUpdate->setValue(0);
+    m_lblUpdateStatus->setText(QStringLiteral("正在上传 %1 位下线机安装包，请勿关闭程序…").arg(bitText));
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString err;
+    const bool ok = UpdateManager::instance().uploadPackage(path, &err,
+        [this](int percent) {
+            m_barUpdate->setValue(percent);
+            QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        }, PackageKind::Device, arch);
+    QApplication::restoreOverrideCursor();
+    if (!ok) {
+        m_lblUpdateStatus->setText(QStringLiteral("上传失败：%1").arg(err));
+        NdMessageBox::warning(this, QStringLiteral("上传失败"), err);
+        return;
+    }
+    m_lblUpdateStatus->setText(QStringLiteral(
+        "上传完成：服务器 %1 位下线机安装包已更新，对应位数的下线机可在主界面点击「检查更新」"
+        "下载并覆盖安装。").arg(bitText));
+    refreshUpdateInfo();
+}
+
+void SettingsDialog::onPickDeviceX86Package()
+{
+    pickDevicePackage(PackageArch::X86);
+}
+
+void SettingsDialog::onUploadDeviceX86Package()
+{
+    uploadDevicePackage(PackageArch::X86);
+}
+
+void SettingsDialog::onPickDeviceX64Package()
+{
+    pickDevicePackage(PackageArch::X64);
+}
+
+void SettingsDialog::onUploadDeviceX64Package()
+{
+    uploadDevicePackage(PackageArch::X64);
 }
 
 // ==================== 字段管理 ====================

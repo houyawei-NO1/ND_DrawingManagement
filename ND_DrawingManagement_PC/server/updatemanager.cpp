@@ -21,38 +21,110 @@
 namespace {
 const qint64 kChunkSize = 1024 * 1024;   // 分块上传：1MB，避免把大安装包整包塞进内存
 
-// PC 与手机 APK 各用一份元数据/临时文件，互不覆盖
-QString metaName(PackageKind k)
+QString archTagOf(PackageArch a)
 {
-    return k == PackageKind::Android ? QStringLiteral("update_android.json")
-                                     : QStringLiteral("update.json");
+    if (a == PackageArch::X86) return QStringLiteral("x86");
+    if (a == PackageArch::X64) return QStringLiteral("x64");
+    return QString();
 }
-QString partName(PackageKind k)
+
+PackageArch archFromTagOf(const QString &tag)
 {
-    return k == PackageKind::Android ? QStringLiteral(".uploading_android.part")
-                                     : QStringLiteral(".uploading.part");
+    const QString s = tag.trimmed().toLower();
+    if (s == QLatin1String("x86") || s == QLatin1String("32")
+        || s == QLatin1String("win32"))
+        return PackageArch::X86;
+    if (s == QLatin1String("x64") || s == QLatin1String("64")
+        || s == QLatin1String("win64") || s == QLatin1String("amd64"))
+        return PackageArch::X64;
+    return PackageArch::Unknown;
+}
+
+QString archSuffixOf(PackageArch a)
+{
+    const QString tag = archTagOf(a);
+    return tag.isEmpty() ? QString() : QStringLiteral("_%1").arg(tag);
+}
+
+// PC / 手机 APK / 下线机 Device 各用一份元数据/临时文件；Device 再按 32/64 位拆开
+QString metaName(PackageKind k, PackageArch a)
+{
+    if (k == PackageKind::Android) return QStringLiteral("update_android.json");
+    if (k == PackageKind::Device) {
+        const QString tag = archTagOf(a);
+        if (!tag.isEmpty())
+            return QStringLiteral("update_device_%1.json").arg(tag);
+        return QStringLiteral("update_device.json");
+    }
+    return QStringLiteral("update.json");
+}
+QString partName(PackageKind k, PackageArch a)
+{
+    if (k == PackageKind::Android) return QStringLiteral(".uploading_android.part");
+    if (k == PackageKind::Device) {
+        const QString tag = archTagOf(a);
+        if (!tag.isEmpty())
+            return QStringLiteral(".uploading_device_%1.part").arg(tag);
+        return QStringLiteral(".uploading_device.part");
+    }
+    return QStringLiteral(".uploading.part");
 }
 QString extName(PackageKind k)
 {
-    return k == PackageKind::Android ? QStringLiteral(".apk") : QStringLiteral(".exe");
+    if (k == PackageKind::Android) return QStringLiteral(".apk");
+    return QStringLiteral(".exe");
 }
-QString globName(PackageKind k)
+QStringList globNames(PackageKind k, PackageArch a)
 {
-    return k == PackageKind::Android ? QStringLiteral("*.apk") : QStringLiteral("*.exe");
+    if (k == PackageKind::Android) return QStringList() << QStringLiteral("*.apk");
+    if (k == PackageKind::Device) {
+        const QString tag = archTagOf(a);
+        if (!tag.isEmpty()) {
+            // 新中文名（下线机设备…-x86.exe）与历史 CutDevice_*_x86.exe 都要能清理，
+            // 否则升级后服务器「安装包」目录会同时留着新旧两套 exe。
+            return QStringList()
+                << QStringLiteral("下线机设备*%1.exe").arg(tag)
+                << QStringLiteral("CutDevice_*%1.exe").arg(tag)
+                << QStringLiteral("*_%1.exe").arg(tag);
+        }
+        return QStringList() << QStringLiteral("CutDevice_*.exe");
+    }
+    // PC 安装包与设备端 exe 扩展名相同，按文件名前缀区分，避免互相删除
+    return QStringList() << QStringLiteral("ND_DrawingManagement_PC*.exe");
+}
+QString globName(PackageKind k, PackageArch a)
+{
+    const QStringList l = globNames(k, a);
+    return l.isEmpty() ? QString() : l.first();
+}
+
+// 与 build_device.ps1 的输出名一致：下线机设备<yyyyMMdd-bXX>-x86/x64.exe。
+// 兼容历史 CutDevice_…_x86.exe，两种分隔符（- 与 _）都接受。
+bool isDevicePackageNameForArch(const QString &name, PackageArch a)
+{
+    const QString tag = archTagOf(a);
+    if (tag.isEmpty()) return false;
+    const QString lower = name.toLower();
+    return lower.endsWith(QStringLiteral("-%1.exe").arg(tag))
+        || lower.endsWith(QStringLiteral("_%1.exe").arg(tag));
 }
 QString kindTag(PackageKind k)
 {
-    return k == PackageKind::Android ? QStringLiteral("android") : QStringLiteral("pc");
+    if (k == PackageKind::Android) return QStringLiteral("android");
+    if (k == PackageKind::Device)  return QStringLiteral("device");
+    return QStringLiteral("pc");
 }
 QString infoApi(PackageKind k)
 {
-    return k == PackageKind::Android ? QStringLiteral("/api/update/android/info")
-                                     : QStringLiteral("/api/update/info");
+    if (k == PackageKind::Android) return QStringLiteral("/api/update/android/info");
+    if (k == PackageKind::Device)  return QStringLiteral("/api/update/device/info");
+    return QStringLiteral("/api/update/info");
 }
 QString packageApi(PackageKind k)
 {
-    return k == PackageKind::Android ? QStringLiteral("/api/update/android/package")
-                                     : QStringLiteral("/api/update/package");
+    if (k == PackageKind::Android) return QStringLiteral("/api/update/android/package");
+    if (k == PackageKind::Device)  return QStringLiteral("/api/update/device/package");
+    return QStringLiteral("/api/update/package");
 }
 
 // 安装包里带 version.txt（两行：version= / stamp=），保证安装后版本号仍是构建日期，
@@ -136,6 +208,7 @@ UpdateInfo infoFromJson(const QJsonObject &o)
     info.available = o.value(QStringLiteral("available")).toBool();
     info.version = o.value(QStringLiteral("version")).toString();
     info.buildStamp = o.value(QStringLiteral("build_stamp")).toString();
+    info.arch = o.value(QStringLiteral("arch")).toString();
     info.fileName = o.value(QStringLiteral("file")).toString();
     info.size = static_cast<qint64>(o.value(QStringLiteral("size")).toDouble());
     info.uploadedAt = o.value(QStringLiteral("uploaded_at")).toString();
@@ -147,6 +220,26 @@ UpdateManager &UpdateManager::instance()
 {
     static UpdateManager inst;
     return inst;
+}
+
+QString UpdateManager::archTag(PackageArch arch)
+{
+    return archTagOf(arch);
+}
+
+PackageArch UpdateManager::archFromTag(const QString &tag)
+{
+    return archFromTagOf(tag);
+}
+
+bool UpdateManager::isDevicePackageName(const QString &fileName, PackageArch arch)
+{
+    return isDevicePackageNameForArch(fileName, arch);
+}
+
+QStringList UpdateManager::packageGlobs(PackageKind kind, PackageArch arch)
+{
+    return globNames(kind, arch);
 }
 
 QString UpdateManager::localVersion() const
@@ -191,30 +284,35 @@ QString UpdateManager::packageDirectory()
     return QDir::cleanPath(root + QStringLiteral("/安装包"));
 }
 
-QString UpdateManager::metaFilePath(PackageKind kind)
+QString UpdateManager::metaFilePath(PackageKind kind, PackageArch arch)
 {
     const QString dir = packageDirectory();
-    return dir.isEmpty() ? QString() : QDir(dir).filePath(metaName(kind));
+    return dir.isEmpty() ? QString() : QDir(dir).filePath(metaName(kind, arch));
 }
 
-QString UpdateManager::partFilePath(PackageKind kind)
+QString UpdateManager::partFilePath(PackageKind kind, PackageArch arch)
 {
     const QString dir = packageDirectory();
-    return dir.isEmpty() ? QString() : QDir(dir).filePath(partName(kind));
+    return dir.isEmpty() ? QString() : QDir(dir).filePath(partName(kind, arch));
 }
 
-QString UpdateManager::localPackagePath(PackageKind kind)
+QString UpdateManager::localPackagePath(PackageKind kind, PackageArch arch)
 {
-    const UpdateInfo info = readLocalMeta(kind);
+    const UpdateInfo info = readLocalMeta(kind, arch);
     if (!info.available || info.fileName.isEmpty())
         return QString();
     return QDir(packageDirectory()).filePath(info.fileName);
 }
 
-UpdateInfo UpdateManager::readLocalMeta(PackageKind kind)
+QString UpdateManager::packageGlob(PackageKind kind, PackageArch arch)
+{
+    return globName(kind, arch);
+}
+
+UpdateInfo UpdateManager::readLocalMeta(PackageKind kind, PackageArch arch)
 {
     const QString dir = packageDirectory();
-    const QString path = metaFilePath(kind);
+    const QString path = metaFilePath(kind, arch);
     if (dir.isEmpty() || !QFileInfo::exists(path))
         return UpdateInfo();
     QFile f(path);
@@ -226,6 +324,8 @@ UpdateInfo UpdateManager::readLocalMeta(PackageKind kind)
         return UpdateInfo();
     UpdateInfo info = infoFromJson(doc.object());
     info.available = false;
+    if (info.arch.isEmpty())
+        info.arch = archTagOf(arch);
     if (info.version.isEmpty() || info.fileName.isEmpty())
         return info;
     // 元数据在但文件丢了，视为没有可用安装包
@@ -237,7 +337,7 @@ UpdateInfo UpdateManager::readLocalMeta(PackageKind kind)
 
 bool UpdateManager::writeLocalMeta(const QString &fileName, const QString &version,
                                    const QString &stamp, qint64 size, QString *err,
-                                   PackageKind kind)
+                                   PackageKind kind, PackageArch arch)
 {
     const QString dir = packageDirectory();
     if (dir.isEmpty() || !QDir().mkpath(dir)) {
@@ -247,11 +347,13 @@ bool UpdateManager::writeLocalMeta(const QString &fileName, const QString &versi
     QJsonObject o;
     o[QStringLiteral("version")] = version;
     o[QStringLiteral("build_stamp")] = stamp;
+    if (!archTagOf(arch).isEmpty())
+        o[QStringLiteral("arch")] = archTagOf(arch);
     o[QStringLiteral("file")] = fileName;
     o[QStringLiteral("size")] = size;
     o[QStringLiteral("uploaded_at")] =
         QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-    QFile f(metaFilePath(kind));
+    QFile f(metaFilePath(kind, arch));
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         if (err) *err = QStringLiteral("无法写入版本信息文件");
         return false;
@@ -261,10 +363,34 @@ bool UpdateManager::writeLocalMeta(const QString &fileName, const QString &versi
     return true;
 }
 
-QString UpdateManager::packageVersion(const QString &srcPath, PackageKind kind)
+QString UpdateManager::packageVersion(const QString &srcPath, PackageKind kind,
+                                      PackageArch arch)
 {
+    Q_UNUSED(arch);
     if (kind == PackageKind::Pc)
         return instance().localVersion();
+    // 下线机 下线机设备20261119-b33-x86.exe（旧名 CutDevice_…_x86.exe 同样兼容）：
+    // 版本就是文件名里的完整构建号（含位数），不能只取日期，否则设备端会误判为同一版本
+    if (kind == PackageKind::Device) {
+        const QString fn = QFileInfo(srcPath).fileName();
+        QRegularExpression reFull(
+            QStringLiteral("(\\d{8}|\\d{4}-\\d{2}-\\d{2})-b\\d+(?:-x86|-x64)?"),
+            QRegularExpression::CaseInsensitiveOption);
+        const QRegularExpressionMatch mf = reFull.match(fn);
+        if (mf.hasMatch())
+            return mf.captured(0).toLower();
+        // 兼容旧文件名：只有日期时仍按日期，客户端会提示版本不一致
+        QRegularExpression re1(QStringLiteral("\\d{4}-\\d{2}-\\d{2}"));
+        QRegularExpressionMatch m1 = re1.match(fn);
+        if (m1.hasMatch()) return m1.captured(0);
+        QRegularExpression re2(QStringLiteral("\\d{8}"));
+        QRegularExpressionMatch m2 = re2.match(fn);
+        if (m2.hasMatch()) {
+            const QString s = m2.captured(0);
+            return QStringLiteral("%1-%2-%3").arg(s.left(4), s.mid(4, 2), s.right(2));
+        }
+        return QFileInfo(srcPath).lastModified().toString(QStringLiteral("yyyy-MM-dd"));
+    }
     // APK 文件名形如 ND_DrawingManagement_v1.0_2026-11-09_debug.apk，优先取里面的构建日期
     const QRegularExpression re(QStringLiteral("\\d{4}-\\d{2}-\\d{2}"));
     const QRegularExpressionMatch m = re.match(QFileInfo(srcPath).fileName());
@@ -283,7 +409,7 @@ QString UpdateManager::packageStamp(const QString &srcPath, PackageKind kind)
 bool UpdateManager::installLocalPackage(const QString &srcPath, const QString &version,
                                         const QString &stamp, QString *err,
                                         const std::function<void(int)> &progress,
-                                        PackageKind kind)
+                                        PackageKind kind, PackageArch arch)
 {
     const QFileInfo si(srcPath);
     if (!si.exists() || !si.isFile()) {
@@ -295,12 +421,21 @@ bool UpdateManager::installLocalPackage(const QString &srcPath, const QString &v
         if (err) *err = QStringLiteral("请选择 %1 格式的安装包").arg(extName(kind));
         return false;
     }
+    if (kind == PackageKind::Device && arch != PackageArch::Unknown
+        && !isDevicePackageNameForArch(name, arch)) {
+        if (err) *err = QStringLiteral("下线机 %1 位安装包文件名须以 -%2.exe 结尾，"
+                                       "例如：下线机设备20261119-b33-%2.exe")
+                            .arg(archTagOf(arch) == QLatin1String("x64")
+                                     ? QStringLiteral("64") : QStringLiteral("32"),
+                                 archTagOf(arch));
+        return false;
+    }
     const QString dir = packageDirectory();
     if (dir.isEmpty() || !QDir().mkpath(dir)) {
         if (err) *err = QStringLiteral("无法创建服务器安装包目录");
         return false;
     }
-    const QString part = partFilePath(kind);
+    const QString part = partFilePath(kind, arch);
     QFile::remove(part);
     const bool copied = copyWithProgress(srcPath, part, err,
         [&progress](int p, qint64, qint64) { if (progress) progress(p); });
@@ -319,14 +454,13 @@ bool UpdateManager::installLocalPackage(const QString &srcPath, const QString &v
         if (err) *err = QStringLiteral("安装包保存失败");
         return false;
     }
-    // 同类型安装包只保留一份（PC 的 exe 与手机 apk 各一份）
-    const QFileInfoList others = QDir(dir).entryInfoList(
-        QStringList() << globName(kind), QDir::Files);
+    // 同一类型 + 同一位数只保留一份；PC 与 Device 不再按 *.exe 互相清理
+    const QFileInfoList others = QDir(dir).entryInfoList(globNames(kind, arch), QDir::Files);
     for (const QFileInfo &fi : others) {
         if (fi.absoluteFilePath() != target)
             QFile::remove(fi.absoluteFilePath());
     }
-    return writeLocalMeta(name, version, stamp, si.size(), err, kind);
+    return writeLocalMeta(name, version, stamp, si.size(), err, kind, arch);
 }
 
 QString UpdateManager::serverBaseUrl()
@@ -376,15 +510,19 @@ QJsonObject UpdateManager::postJson(const QString &path, const QJsonObject &payl
     return doc.object();
 }
 
-UpdateInfo UpdateManager::checkUpdate(QString *err, PackageKind kind) const
+UpdateInfo UpdateManager::checkUpdate(QString *err, PackageKind kind, PackageArch arch) const
 {
     if (DatabaseManager::isServer())
-        return readLocalMeta(kind);
-    // PC 端统一走已有的 POST /api/update/info，用 kind 区分手机 APK；
+        return readLocalMeta(kind, arch);
+    // PC 端统一走已有的 POST /api/update/info，用 kind + arch 区分；
     // 手机 APP 用 GET /api/update/android/info（服务端另有路由）
     QJsonObject payload;
     if (kind == PackageKind::Android)
         payload[QStringLiteral("kind")] = QStringLiteral("android");
+    else if (kind == PackageKind::Device)
+        payload[QStringLiteral("kind")] = QStringLiteral("device");
+    if (arch != PackageArch::Unknown)
+        payload[QStringLiteral("arch")] = archTagOf(arch);
     const QJsonObject res = postJson(QStringLiteral("/api/update/info"), payload, err, 8000);
     if (res.isEmpty())
         return UpdateInfo();
@@ -397,7 +535,7 @@ UpdateInfo UpdateManager::checkUpdate(QString *err, PackageKind kind) const
 
 bool UpdateManager::uploadPackage(const QString &srcPath, QString *err,
                                   const std::function<void(int)> &progress,
-                                  PackageKind kind) const
+                                  PackageKind kind, PackageArch arch) const
 {
     const QFileInfo si(srcPath);
     if (!si.exists() || !si.isFile()) {
@@ -409,10 +547,19 @@ bool UpdateManager::uploadPackage(const QString &srcPath, QString *err,
         if (err) *err = QStringLiteral("请选择 %1 格式的安装包").arg(extName(kind));
         return false;
     }
-    const QString version = packageVersion(srcPath, kind);
+    if (kind == PackageKind::Device && arch != PackageArch::Unknown
+        && !isDevicePackageNameForArch(name, arch)) {
+        if (err) *err = QStringLiteral("下线机 %1 位安装包文件名须以 -%2.exe 结尾，"
+                                       "例如：下线机设备20261119-b33-%2.exe")
+                            .arg(archTagOf(arch) == QLatin1String("x64")
+                                     ? QStringLiteral("64") : QStringLiteral("32"),
+                                 archTagOf(arch));
+        return false;
+    }
+    const QString version = packageVersion(srcPath, kind, arch);
     const QString stamp = packageStamp(srcPath, kind);
     if (DatabaseManager::isServer())
-        return installLocalPackage(srcPath, version, stamp, err, progress, kind);
+        return installLocalPackage(srcPath, version, stamp, err, progress, kind, arch);
 
     const qint64 total = si.size();
     QFile in(srcPath);
@@ -433,6 +580,8 @@ bool UpdateManager::uploadPackage(const QString &srcPath, QString *err,
         p[QStringLiteral("size")] = total;
         p[QStringLiteral("offset")] = offset;
         p[QStringLiteral("chunk")] = QString::fromLatin1(chunk.toBase64());
+        if (arch != PackageArch::Unknown)
+            p[QStringLiteral("arch")] = archTagOf(arch);
         p[QStringLiteral("final")] = final;
         QString e;
         const QJsonObject res = postJson(QStringLiteral("/api/update/upload"), p, &e, 60000);
@@ -452,10 +601,10 @@ bool UpdateManager::uploadPackage(const QString &srcPath, QString *err,
 
 bool UpdateManager::downloadPackage(const QString &destPath, QString *err,
                                     const std::function<void(int, qint64, qint64)> &progress,
-                                    PackageKind kind) const
+                                    PackageKind kind, PackageArch arch) const
 {
     if (DatabaseManager::isServer()) {
-        const QString src = localPackagePath(kind);
+        const QString src = localPackagePath(kind, arch);
         if (src.isEmpty()) {
             if (err) *err = QStringLiteral("服务器上还没有安装包");
             return false;
@@ -463,8 +612,11 @@ bool UpdateManager::downloadPackage(const QString &destPath, QString *err,
         return copyWithProgress(src, destPath, err, progress);
     }
 
+    QString api = packageApi(kind);
+    if (arch != PackageArch::Unknown)
+        api += QStringLiteral("?arch=%1").arg(archTagOf(arch));
     QNetworkAccessManager nam;
-    QNetworkRequest req(QUrl(serverBaseUrl() + packageApi(kind)));
+    QNetworkRequest req(QUrl(serverBaseUrl() + api));
     QNetworkReply *reply = nam.get(req);
     QFile out(destPath);
     if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {

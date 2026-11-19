@@ -325,6 +325,10 @@ LanHttpServer::LanHttpServer(QObject *parent) : QObject(parent)
     m_http->route(QStringLiteral("/api/auth/login"),
                   QHttpServerRequest::Method::Post,
                   [this](const QHttpServerRequest &req) { return handleLogin(req); });
+    // 下线机设备端：按机台号 + 设备密钥自动换 token，不做人工登录
+    m_http->route(QStringLiteral("/api/device/auth"),
+                  QHttpServerRequest::Method::Post,
+                  [this](const QHttpServerRequest &req) { return handleDeviceAuth(req); });
     // 只读查询：网页端 / 手机端 / 客户端共用同一份数据，无需登录
     m_http->route(QStringLiteral("/api/data"),
                   QHttpServerRequest::Method::Post,
@@ -334,7 +338,7 @@ LanHttpServer::LanHttpServer(QObject *parent) : QObject(parent)
                   QHttpServerRequest::Method::Post,
                   [this](const QHttpServerRequest &req) { return handleWrite(req); });
 
-    // ===== 版本管理：安装包只保存在服务器工作路径，PC 与手机 APK 各一份 =====
+    // ===== 版本管理：安装包只保存在服务器工作路径，PC / 手机 APK / 下线机 Device 各一份 =====
     m_http->route(QStringLiteral("/api/update/info"),
                   QHttpServerRequest::Method::Post,
                   [this](const QHttpServerRequest &req) { return handleUpdateInfo(req); });
@@ -342,12 +346,17 @@ LanHttpServer::LanHttpServer(QObject *parent) : QObject(parent)
                   QHttpServerRequest::Method::Post,
                   [this](const QHttpServerRequest &req) { return handleUpdateUpload(req); });
     m_http->route(QStringLiteral("/api/update/package"),
-                  [this] { return handleUpdatePackage(); });
+                  [this](const QHttpServerRequest &req) { return handleUpdatePackage(req); });
     // 手机 APP 检查更新/下载 APK：同一局域网内免登录
     m_http->route(QStringLiteral("/api/update/android/info"),
                   [this] { return handleAndroidInfo(); });
     m_http->route(QStringLiteral("/api/update/android/package"),
                   [this] { return handleAndroidPackage(); });
+    // 下线机 Device 检查更新/下载 exe：同一局域网内免登录，按 arch=x86|x64 区分
+    m_http->route(QStringLiteral("/api/update/device/info"),
+                  [this](const QHttpServerRequest &req) { return handleDeviceInfo(req); });
+    m_http->route(QStringLiteral("/api/update/device/package"),
+                  [this](const QHttpServerRequest &req) { return handleDevicePackage(req); });
 }
 
 QDateTime LanHttpServer::parseSince(const QString &s)
@@ -396,6 +405,45 @@ QHttpServerResponse LanHttpServer::handleLogin(const QHttpServerRequest &req)
     extra[QStringLiteral("token")] = token;
     extra[QStringLiteral("role")] = role;
     extra[QStringLiteral("user")] = user;
+    return jsonOk(extra);
+}
+
+QHttpServerResponse LanHttpServer::handleDeviceAuth(const QHttpServerRequest &req)
+{
+    QJsonObject b;
+    if (!parseBody(req, &b))
+        return jsonErr(QStringLiteral("请求格式错误"));
+    const int machineNo = b.value(QStringLiteral("machineNo")).toInt(-1);
+    const QString deviceKey = b.value(QStringLiteral("deviceKey")).toString().trimmed();
+    int machineId = 0;
+    QString machineName;
+    QString err;
+    if (!DatabaseManager::instance().cutDeviceAuth(machineNo, deviceKey,
+                                                   &machineId, &machineName, &err))
+        return jsonErr(err.isEmpty() ? QStringLiteral("设备认证失败") : err);
+
+    const QString token = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString account = QStringLiteral("设备:%1").arg(machineName);
+    {
+        QMutexLocker lk(&m_tokenMutex);
+        const QDateTime now = QDateTime::currentDateTime();
+        for (auto it = m_tokens.begin(); it != m_tokens.end();) {
+            if (it.value().second <= now)
+                it = m_tokens.erase(it);
+            else
+                ++it;
+        }
+        m_tokens.insert(token, qMakePair(account, now.addSecs(12 * 3600)));
+    }
+    const QString ip = req.remoteAddress().toString();
+    appendLog(QStringLiteral("设备认证成功：%1（IP=%2）").arg(machineName, ip));
+    recordClient(ip, account, QStringLiteral("设备认证"));
+
+    QJsonObject extra;
+    extra[QStringLiteral("token")] = token;
+    extra[QStringLiteral("machineId")] = machineId;
+    extra[QStringLiteral("machineNo")] = machineNo;
+    extra[QStringLiteral("machineName")] = machineName;
     return jsonOk(extra);
 }
 
@@ -557,6 +605,52 @@ QHttpServerResponse LanHttpServer::handleData(const QHttpServerRequest &req)
             arr.append(c.toJson());
         extra[QStringLiteral("items")] = arr;
         extra[QStringLiteral("total")] = total;
+        return jsonOk(extra);
+    }
+    // 线束 → 模具端子：只读查询（未登录也能查），写操作在 handleWrite 带 token
+    if (action == QLatin1String("mold_query")) {
+        int total = 0;
+        const QList<MoldItem> list = db.moldSearch(
+            b.value(QStringLiteral("keyword")).toString(),
+            b.value(QStringLiteral("status")).toString(),
+            b.value(QStringLiteral("limit")).toInt(1000), &total);
+        QJsonArray arr;
+        for (const MoldItem &m : list)
+            arr.append(m.toJson());
+        extra[QStringLiteral("items")] = arr;
+        extra[QStringLiteral("total")] = total;
+        return jsonOk(extra);
+    }
+    // 线束下线：只读查询（批次/明细/机器/任务）
+    if (action == QLatin1String("cut_query")) {
+        const QString what = b.value(QStringLiteral("what")).toString();
+        QJsonArray arr;
+        if (what == QLatin1String("batches")) {
+            for (const CutBatch &x : db.cutBatches()) arr.append(x.toJson());
+        } else if (what == QLatin1String("items")) {
+            for (const CutItem &x : db.cutItems(b.value(QStringLiteral("batchId")).toInt()))
+                arr.append(x.toJson());
+        } else if (what == QLatin1String("machines")) {
+            for (const CutMachine &x : db.cutMachines()) arr.append(x.toJson());
+        } else if (what == QLatin1String("rules")) {
+            for (const CutRule &x : db.cutRules()) arr.append(x.toJson());
+        } else if (what == QLatin1String("tasks")) {
+            for (const CutTask &x : db.cutTasks(b.value(QStringLiteral("batchId")).toInt(),
+                                               b.value(QStringLiteral("machineId")).toInt(),
+                                               b.value(QStringLiteral("status")).toString()))
+                arr.append(x.toJson());
+        } else if (what == QLatin1String("preview_dispatch")) {
+            QList<CutTask> preview;
+            int fixed = 0, balanced = 0;
+            QString previewErr;
+            if (!db.cutAutoDispatchPreview(b.value(QStringLiteral("batchId")).toInt(),
+                                           &preview, &fixed, &balanced, &previewErr))
+                return jsonErr(previewErr.isEmpty() ? QStringLiteral("智能分配预览失败") : previewErr);
+            for (const CutTask &x : preview) arr.append(x.toJson());
+            extra[QStringLiteral("fixedCount")] = fixed;
+            extra[QStringLiteral("balancedCount")] = balanced;
+        }
+        extra[QStringLiteral("items")] = arr;
         return jsonOk(extra);
     }
     if (action == QLatin1String("list_users")) {
@@ -759,6 +853,149 @@ QHttpServerResponse LanHttpServer::handleWrite(const QHttpServerRequest &req)
             return jsonOk();
         }
         return jsonErr(QStringLiteral("未知的芯片操作"));
+    }
+    // 线束 → 模具端子：客户端写操作，validToken 已在 handleWrite 入口统一校验
+    if (action == QLatin1String("mold_write")) {
+        const QString op = b.value(QStringLiteral("op")).toString();
+        if (op == QLatin1String("save")) {
+            MoldItem m = MoldItem::fromJson(b);
+            if (!db.moldSave(&m, &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("模具信息保存失败") : err);
+            QJsonObject res;
+            res[QStringLiteral("id")] = m.id;
+            return jsonOk(res);
+        }
+        if (op == QLatin1String("delete")) {
+            if (!db.moldDelete(b.value(QStringLiteral("id")).toInt(-1), &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("模具信息删除失败") : err);
+            return jsonOk();
+        }
+        return jsonErr(QStringLiteral("未知的模具操作"));
+    }
+    // 线束下线：客户端写操作，validToken 已在 handleWrite 入口统一校验
+    if (action == QLatin1String("cut_write")) {
+        const QString op = b.value(QStringLiteral("op")).toString();
+        if (op == QLatin1String("import_batch")) {
+            CutBatch batch = CutBatch::fromJson(b);
+            batch.creator = b.value(QStringLiteral("creator")).toString();
+            QList<CutItem> items;
+            for (const QJsonValue &v : b.value(QStringLiteral("items")).toArray())
+                items.append(CutItem::fromJson(v.toObject()));
+            const int id = db.cutImportBatch(batch, items, &err);
+            if (id < 0) return jsonErr(err.isEmpty() ? QStringLiteral("下线表导入失败") : err);
+            QJsonObject res; res[QStringLiteral("id")] = id;
+            return jsonOk(res);
+        }
+        if (op == QLatin1String("delete_batch")) {
+            if (!db.cutDeleteBatch(b.value(QStringLiteral("batchId")).toInt(), &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("删除批次失败") : err);
+            return jsonOk();
+        }
+        if (op == QLatin1String("save_machine")) {
+            CutMachine m = CutMachine::fromJson(b);
+            if (!db.cutSaveMachine(&m, &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("机器保存失败") : err);
+            QJsonObject res; res[QStringLiteral("id")] = m.id;
+            return jsonOk(res);
+        }
+        if (op == QLatin1String("save_rule")) {
+            CutRule r = CutRule::fromJson(b);
+            if (!db.cutSaveRule(&r, &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("派单规则保存失败") : err);
+            QJsonObject res; res[QStringLiteral("id")] = r.id;
+            return jsonOk(res);
+        }
+        if (op == QLatin1String("delete_rule")) {
+            if (!db.cutDeleteRule(b.value(QStringLiteral("id")).toInt(-1), &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("派单规则删除失败") : err);
+            return jsonOk();
+        }
+        if (op == QLatin1String("dispatch")) {
+            QList<int> ids;
+            for (const QJsonValue &v : b.value(QStringLiteral("itemIds")).toArray())
+                ids.append(v.toInt());
+            if (!db.cutDispatch(b.value(QStringLiteral("batchId")).toInt(),
+                                b.value(QStringLiteral("machineId")).toInt(), ids,
+                                b.value(QStringLiteral("quantity")).toInt(1), &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("派工失败") : err);
+            return jsonOk();
+        }
+        if (op == QLatin1String("auto_dispatch")) {
+            int fixed = 0, balanced = 0;
+            if (!db.cutAutoDispatch(b.value(QStringLiteral("batchId")).toInt(),
+                                    b.value(QStringLiteral("quantity")).toInt(1),
+                                    &fixed, &balanced, &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("智能派工失败") : err);
+            QJsonObject res;
+            res[QStringLiteral("fixedCount")] = fixed;
+            res[QStringLiteral("balancedCount")] = balanced;
+            return jsonOk(res);
+        }
+        if (op == QLatin1String("commit_dispatch")) {
+            QList<CutAssign> assigns;
+            for (const QJsonValue &v : b.value(QStringLiteral("assigns")).toArray())
+                assigns.append(CutAssign::fromJson(v.toObject()));
+            if (!db.cutCommitDispatch(b.value(QStringLiteral("batchId")).toInt(), assigns,
+                                      b.value(QStringLiteral("quantity")).toInt(1), &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("确认派工失败") : err);
+            return jsonOk();
+        }
+        if (op == QLatin1String("retask")) {
+            if (!db.cutRetask(b.value(QStringLiteral("taskId")).toInt(),
+                              b.value(QStringLiteral("machineId")).toInt(), &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("任务改派失败") : err);
+            return jsonOk();
+        }
+        if (op == QLatin1String("finish_task")) {
+            if (!db.cutFinishTask(b.value(QStringLiteral("taskId")).toInt(),
+                                  b.value(QStringLiteral("doneQty")).toInt(),
+                                  b.value(QStringLiteral("operator")).toString(), &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("任务完成回传失败") : err);
+            return jsonOk();
+        }
+        if (op == QLatin1String("start_task")) {
+            const int taskId = b.value(QStringLiteral("taskId")).toInt(-1);
+            const int machineId = b.value(QStringLiteral("machineId")).toInt(-1);
+            if (!db.cutStartTask(taskId, machineId, &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("任务开始失败") : err);
+            QJsonObject res;
+            res[QStringLiteral("taskId")] = taskId;
+            res[QStringLiteral("status")] = 2;
+            return jsonOk(res);
+        }
+        if (op == QLatin1String("confirm_task")) {
+            const int taskId = b.value(QStringLiteral("taskId")).toInt(-1);
+            const int machineId = b.value(QStringLiteral("machineId")).toInt(-1);
+            const QString oper = b.value(QStringLiteral("operator")).toString().trimmed().isEmpty()
+                ? who : b.value(QStringLiteral("operator")).toString().trimmed();
+            int doneQty = 0, quantity = 0, status = 0;
+            bool finished = false;
+            // qty：本次报产条数；设备端点「已完成」传整条剩余数量，一次完成整条任务
+            int step = b.value(QStringLiteral("qty")).toInt(1);
+            if (step < 1) step = 1;
+            if (!db.cutConfirmTask(taskId, machineId, oper, &doneQty, &quantity,
+                                   &status, &finished, &err, step))
+                return jsonErr(err.isEmpty() ? QStringLiteral("任务确认失败") : err);
+            QJsonObject res;
+            res[QStringLiteral("taskId")] = taskId;
+            res[QStringLiteral("doneQty")] = doneQty;
+            res[QStringLiteral("quantity")] = quantity;
+            res[QStringLiteral("status")] = status;
+            res[QStringLiteral("finished")] = finished;
+            return jsonOk(res);
+        }
+        if (op == QLatin1String("log_print")) {
+            if (!db.cutLogPrint(b.value(QStringLiteral("taskId")).toInt(),
+                                b.value(QStringLiteral("machineId")).toInt(),
+                                b.value(QStringLiteral("operator")).toString(),
+                                b.value(QStringLiteral("labelNo")).toString(),
+                                b.value(QStringLiteral("copies")).toInt(1),
+                                b.value(QStringLiteral("result")).toString(QStringLiteral("success")),
+                                &err))
+                return jsonErr(err.isEmpty() ? QStringLiteral("打印日志写入失败") : err);
+            return jsonOk();
+        }
+        return jsonErr(QStringLiteral("未知的下线操作"));
     }
     if (action == QLatin1String("update_drawing_meta")) {
         const QDate date = QDate::fromString(b.value(QStringLiteral("drawing_date")).toString(),
@@ -1005,18 +1242,39 @@ QHttpServerResponse LanHttpServer::syncFile(const QString &relPath, const QHttpS
 }
 
 // ===== 版本管理：安装包分发 =====
+// 下线机旧客户端不带 arch，默认按 32 位处理（现场 4 台 WinXP 都是 32 位）
+static PackageArch archFromRequest(const QHttpServerRequest &req, PackageKind kind)
+{
+    PackageArch arch = UpdateManager::archFromTag(
+        req.query().queryItemValue(QStringLiteral("arch")));
+    if (kind == PackageKind::Device && arch == PackageArch::Unknown)
+        arch = PackageArch::X86;
+    return arch;
+}
+
 QHttpServerResponse LanHttpServer::handleUpdateInfo(const QHttpServerRequest &req)
 {
-    // 兼容旧客户端的空 body；kind=android 时返回手机 APK 的元数据
+    // 兼容旧客户端的空 body；kind=android 走手机 APK，kind=device 走下线机 exe
     QJsonObject b;
     parseBody(req, &b);
-    const PackageKind kind = b.value(QStringLiteral("kind")).toString() == QLatin1String("android")
-                                 ? PackageKind::Android : PackageKind::Pc;
-    const UpdateInfo info = UpdateManager::readLocalMeta(kind);
+    const QString kindStr = b.value(QStringLiteral("kind")).toString();
+    PackageKind kind = PackageKind::Pc;
+    if (kindStr == QLatin1String("android"))
+        kind = PackageKind::Android;
+    else if (kindStr == QLatin1String("device"))
+        kind = PackageKind::Device;
+    PackageArch arch = UpdateManager::archFromTag(b.value(QStringLiteral("arch")).toString());
+    if (kind == PackageKind::Device && arch == PackageArch::Unknown)
+        arch = PackageArch::X86;
+    const UpdateInfo info = UpdateManager::readLocalMeta(kind, arch);
     QJsonObject o;
     o[QStringLiteral("available")] = info.available;
     o[QStringLiteral("version")] = info.version;
     o[QStringLiteral("build_stamp")] = info.buildStamp;
+    if (!UpdateManager::archTag(arch).isEmpty())
+        o[QStringLiteral("arch")] = UpdateManager::archTag(arch);
+    if (!info.arch.isEmpty())
+        o[QStringLiteral("arch")] = info.arch;
     o[QStringLiteral("file")] = info.fileName;
     o[QStringLiteral("size")] = info.size;
     o[QStringLiteral("uploaded_at")] = info.uploadedAt;
@@ -1031,16 +1289,31 @@ QHttpServerResponse LanHttpServer::handleUpdateUpload(const QHttpServerRequest &
     if (!validToken(b.value(QStringLiteral("token")).toString()))
         return jsonErr(QStringLiteral("登录已失效，请重新登录后再上传安装包"));
 
-    // kind=android 走手机 APK，其余（含旧客户端未带 kind）按 PC 安装包处理
+    // kind=android 走手机 APK，kind=device 走下线机 exe，其余（含旧客户端未带 kind）按 PC 安装包处理
     const QString kindTag = b.value(QStringLiteral("kind")).toString(QStringLiteral("pc"));
-    const PackageKind kind = kindTag == QLatin1String("android")
-                                 ? PackageKind::Android : PackageKind::Pc;
-    const QString ext = kind == PackageKind::Android
-                            ? QStringLiteral(".apk") : QStringLiteral(".exe");
+    PackageKind kind = PackageKind::Pc;
+    QString ext = QStringLiteral(".exe");
+    if (kindTag == QLatin1String("android")) {
+        kind = PackageKind::Android;
+        ext = QStringLiteral(".apk");
+    } else if (kindTag == QLatin1String("device")) {
+        kind = PackageKind::Device;
+        ext = QStringLiteral(".exe");
+    }
+    const PackageArch arch = UpdateManager::archFromTag(b.value(QStringLiteral("arch")).toString());
+    const QString archStr = UpdateManager::archTag(arch);
+    if (kind == PackageKind::Device && arch == PackageArch::Unknown)
+        return jsonErr(QStringLiteral("下线机安装包必须指定 arch=x86 或 arch=x64"));
+
     // 只取文件名，杜绝 ../ 之类的路径穿越；必须是对应格式的安装包
     const QString name = QFileInfo(b.value(QStringLiteral("name")).toString()).fileName();
     if (name.isEmpty() || !name.endsWith(ext, Qt::CaseInsensitive))
         return jsonErr(QStringLiteral("安装包文件名不合法"));
+    if (kind == PackageKind::Device
+        && !UpdateManager::isDevicePackageName(name, arch)) {
+        return jsonErr(QStringLiteral("下线机 %1 位安装包文件名须以 -%1.exe 结尾，"
+                                      "例如：下线机设备20261119-b33-%1.exe").arg(archStr));
+    }
     const qint64 size = static_cast<qint64>(b.value(QStringLiteral("size")).toDouble());
     const qint64 offset = static_cast<qint64>(b.value(QStringLiteral("offset")).toDouble());
     const QByteArray chunk = QByteArray::fromBase64(
@@ -1052,7 +1325,7 @@ QHttpServerResponse LanHttpServer::handleUpdateUpload(const QHttpServerRequest &
     const QString dir = UpdateManager::packageDirectory();
     if (dir.isEmpty() || !QDir().mkpath(dir))
         return jsonErr(QStringLiteral("无法创建服务器安装包目录"));
-    const QString part = UpdateManager::partFilePath(kind);
+    const QString part = UpdateManager::partFilePath(kind, arch);
 
     // 先写 .uploading.part，最后一块成功才替换正式包：上传中断不会破坏现有安装包
     if (offset == 0) {
@@ -1060,11 +1333,12 @@ QHttpServerResponse LanHttpServer::handleUpdateUpload(const QHttpServerRequest &
         m_uploadOffset = 0;
         m_uploadName = name;
         m_uploadKind = kindTag;
+        m_uploadArch = archStr;
         m_uploadVersion = b.value(QStringLiteral("version")).toString();
         m_uploadStamp = b.value(QStringLiteral("build_stamp")).toString();
         m_uploadSize = size;
     } else if (offset != m_uploadOffset || name != m_uploadName
-               || kindTag != m_uploadKind) {
+               || kindTag != m_uploadKind || archStr != m_uploadArch) {
         return jsonErr(QStringLiteral("上传分块不连续，请重新上传"));
     }
 
@@ -1102,18 +1376,16 @@ QHttpServerResponse LanHttpServer::handleUpdateUpload(const QHttpServerRequest &
         m_uploadOffset = 0;
         return jsonErr(QStringLiteral("安装包保存失败"));
     }
-    // 同类型安装包只保留一份（PC 的 exe 与手机 apk 互不清理）
+    // 同类型 + 同位数只保留一份；PC 与 Device、x86 与 x64 互不清理
     const QFileInfoList others = QDir(dir).entryInfoList(
-        QStringList() << (kind == PackageKind::Android
-                              ? QStringLiteral("*.apk") : QStringLiteral("*.exe")),
-        QDir::Files);
+        UpdateManager::packageGlobs(kind, arch), QDir::Files);
     for (const QFileInfo &fi : others) {
         if (fi.absoluteFilePath() != target)
             QFile::remove(fi.absoluteFilePath());
     }
     QString err;
     if (!UpdateManager::writeLocalMeta(m_uploadName, m_uploadVersion, m_uploadStamp,
-                                       m_uploadSize, &err, kind)) {
+                                       m_uploadSize, &err, kind, arch)) {
         m_uploadOffset = 0;
         return jsonErr(err.isEmpty() ? QStringLiteral("版本信息写入失败") : err);
     }
@@ -1141,8 +1413,9 @@ static QByteArray attachmentDisposition(const QString &path)
         .toUtf8();
 }
 
-QHttpServerResponse LanHttpServer::handleUpdatePackage() const
+QHttpServerResponse LanHttpServer::handleUpdatePackage(const QHttpServerRequest &req) const
 {
+    Q_UNUSED(req);
     const QString abs = UpdateManager::localPackagePath();
     if (abs.isEmpty() || !QFileInfo::exists(abs))
         return QHttpServerResponse(QHttpServerResponder::StatusCode::NotFound);
@@ -1176,6 +1449,38 @@ QHttpServerResponse LanHttpServer::handleAndroidPackage() const
     if (abs.isEmpty() || !QFileInfo::exists(abs))
         return QHttpServerResponse(QHttpServerResponder::StatusCode::NotFound);
     // 二维码扫码 / 直接打开下载地址时同样保留原 APK 文件名（含版本号）
+    QHttpServerResponse resp = QHttpServerResponse::fromFile(abs);
+    QHttpHeaders hdr = resp.headers();
+    hdr.append(QHttpHeaders::WellKnownHeader::ContentDisposition,
+               attachmentDisposition(abs));
+    hdr.append(QHttpHeaders::WellKnownHeader::Connection, QByteArrayLiteral("close"));
+    resp.setHeaders(hdr);
+    return resp;
+}
+
+// 下线机 Device 检查更新：免登录 GET，按 arch=x86|x64 区分
+QHttpServerResponse LanHttpServer::handleDeviceInfo(const QHttpServerRequest &req) const
+{
+    const PackageArch arch = archFromRequest(req, PackageKind::Device);
+    const UpdateInfo info = UpdateManager::readLocalMeta(PackageKind::Device, arch);
+    QJsonObject o;
+    o[QStringLiteral("available")] = info.available;
+    o[QStringLiteral("version")] = info.version;
+    o[QStringLiteral("build_stamp")] = info.buildStamp;
+    o[QStringLiteral("arch")] = UpdateManager::archTag(arch);
+    o[QStringLiteral("file")] = info.fileName;
+    o[QStringLiteral("size")] = info.size;
+    o[QStringLiteral("uploaded_at")] = info.uploadedAt;
+    return jsonOk(o);
+}
+
+// 下线机 Device 下载安装包：免登录 GET，按 arch=x86|x64 区分
+QHttpServerResponse LanHttpServer::handleDevicePackage(const QHttpServerRequest &req) const
+{
+    const PackageArch arch = archFromRequest(req, PackageKind::Device);
+    const QString abs = UpdateManager::localPackagePath(PackageKind::Device, arch);
+    if (abs.isEmpty() || !QFileInfo::exists(abs))
+        return QHttpServerResponse(QHttpServerResponder::StatusCode::NotFound);
     QHttpServerResponse resp = QHttpServerResponse::fromFile(abs);
     QHttpHeaders hdr = resp.headers();
     hdr.append(QHttpHeaders::WellKnownHeader::ContentDisposition,

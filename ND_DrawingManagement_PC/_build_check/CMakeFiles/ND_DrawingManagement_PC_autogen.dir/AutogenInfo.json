@@ -431,6 +431,12 @@
 			null
 		],
 		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/cuttaskpage.h",
+			"MU",
+			"UYX5XTB5RZ/moc_cuttaskpage.cpp",
+			null
+		],
+		[
 			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/dataentrynotify.h",
 			"MU",
 			"UYX5XTB5RZ/moc_dataentrynotify.cpp",
@@ -458,6 +464,24 @@
 			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/materialcodedialog.h",
 			"MU",
 			"UYX5XTB5RZ/moc_materialcodedialog.cpp",
+			null
+		],
+		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/moldquerypage.h",
+			"MU",
+			"UYX5XTB5RZ/moc_moldquerypage.cpp",
+			null
+		],
+		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/moldterminalpage.h",
+			"MU",
+			"UYX5XTB5RZ/moc_moldterminalpage.cpp",
+			null
+		],
+		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/ndinputdialog.h",
+			"MU",
+			"UYX5XTB5RZ/moc_ndinputdialog.cpp",
 			null
 		],
 		[
@@ -539,9 +563,21 @@
 			null
 		],
 		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/cuttypes.h",
+			"MU",
+			"KH43KSYMFX/moc_cuttypes.cpp",
+			null
+		],
+		[
 			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/modelcodec.h",
 			"MU",
 			"KH43KSYMFX/moc_modelcodec.cpp",
+			null
+		],
+		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/util/moldtypes.h",
+			"MU",
+			"KH43KSYMFX/moc_moldtypes.cpp",
 			null
 		],
 		[
@@ -696,6 +732,11 @@
 			null
 		],
 		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/cuttaskpage.cpp",
+			"MU",
+			null
+		],
+		[
 			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/dataentrynotify.cpp",
 			"MU",
 			null
@@ -717,6 +758,21 @@
 		],
 		[
 			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/materialcodedialog.cpp",
+			"MU",
+			null
+		],
+		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/moldquerypage.cpp",
+			"MU",
+			null
+		],
+		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/moldterminalpage.cpp",
+			"MU",
+			null
+		],
+		[
+			"E:/HouYawei/01.QTProject/ND_DrawingManagement/ND_DrawingManagement_PC/ui/ndinputdialog.cpp",
 			"MU",
 			null
 		],
